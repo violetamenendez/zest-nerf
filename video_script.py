@@ -20,7 +20,7 @@ for scene in scenes:
         count = 0
         while success:
             # Save frame
-            img_path = str(save_path / f"frame{count}.jpg")
+            img_path = str(save_path / f"frame{count:03}.jpg")
             cv2.imwrite(img_path, image)
             success, image = vidcap.read()
             print(f'Read a new frame from {cam_name} in {scene}: ', success)
