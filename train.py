@@ -62,7 +62,7 @@ class MVSNeRFSystem(LightningModule):
         self.hparams.use_mvs = use_mvs
 
         # From MVSSystem
-        self.hparams.feat_dim = 8+3*4
+        self.hparams.feat_dim = 8+self.hparams.num_input*4
         self.idx = 0 # validation step counter
 
         # Losses
@@ -143,6 +143,8 @@ class MVSNeRFSystem(LightningModule):
             kwargs['max_len'] = -1
         if self.hparams.dataset_name == 'llff':
             kwargs['depth_path'] = self.hparams.depth_path
+        if self.hparams.dataset_name == 'neural3Dvideo':
+            kwargs['frame'] = 1
         self.train_dataset = dataset(self.hparams.datadir,
                                      split='train',
                                      config_dir=self.hparams.configdir,
