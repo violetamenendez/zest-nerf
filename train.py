@@ -15,6 +15,7 @@
 import imageio
 import logging, coloredlogs
 from pathlib import Path
+import math
 
 # torch
 import torch
@@ -77,6 +78,16 @@ class MVSNeRFSystem(LightningModule):
         # Metrics
         self.lpips = self.perc_loss
 
+        self.time_codes = None
+        if self.hparams.train_video:
+            print("Training video...")
+            self.num_frames = 30
+            self.time_codes = torch.normal(mean=0.0,
+                                           std=(0.01/math.sqrt(int(self.hparams.time_code_dim))),
+                                           size=(int(self.num_frames),int(self.hparams.time_code_dim)))
+            self.time_codes.requires_grad = True
+            print("Time codes initialised: ", self.time_codes.shape)
+
         # Define embedders
         self.embedding_xyz = Embedding(self.hparams.pts_dim, self.hparams.multires) if pts_embedder else None
         self.embedding_dir = Embedding(self.hparams.dir_dim, self.hparams.multires_views) if dir_embedder else None
@@ -84,6 +95,8 @@ class MVSNeRFSystem(LightningModule):
 
         # Define coarse NeRF
         self.input_ch = self.embedding_xyz.out_channels if self.embedding_xyz else self.hparams.pts_dim
+        if self.hparams.train_video:
+            self.input_ch += int(self.hparams.time_code_dim)
         self.input_ch_views = self.embedding_dir.out_channels if self.embedding_dir else self.hparams.dir_dim
         self.output_ch = 4
         skips = [4] # Maybe this should be defined somewhere else
@@ -241,7 +254,12 @@ class MVSNeRFSystem(LightningModule):
         return (data - mean) / std
 
     def forward(self, data_mvs):
-        rgb, target_s, depth_pred, depth, weights, t_vals = self.generator(data_mvs, self.global_step)
+        if self.time_codes is not None:
+            print("training forward has time codes", self.time_codes.shape)
+
+        rgb, target_s, depth_pred, depth, weights, t_vals = self.generator(data_mvs,
+                                                                           self.global_step,
+                                                                           time_codes=self.time_codes)
 
         return {'rgb': rgb,
                 'target_s': target_s,
@@ -452,6 +470,7 @@ class MVSNeRFSystem(LightningModule):
                                                                     network_fn=self.nerf_coarse,
                                                                     embedding_pts=self.embedding_xyz,
                                                                     embedding_dir=self.embedding_dir,
+                                                                    time_codes=self.time_codes,
                                                                     white_bkgd=self.hparams.white_bkgd)
                 rgbs.append(rgb.squeeze(0));depth_preds.append(depth_pred.squeeze(0))
                 logging.info("render outs rgb depth "+str(rgb.shape)+", "+str(depth_pred.shape))

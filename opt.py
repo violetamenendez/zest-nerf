@@ -68,6 +68,8 @@ def config_parser(cmd=None):
                         help='select 32 bits precision or mixed precision')
     parser.add_argument("--acc_grad", type=int, default=1,
                         help='number of batches to accumulate gradients over')
+    parser.add_argument('--train_video', action='store_true',
+                        help='training of a dynamic scene')
 
     # Hyperparameters
     parser.add_argument("--lrate", type=float, default=5e-4,
@@ -95,6 +97,9 @@ def config_parser(cmd=None):
                         help='Depth smoothness loss coefficient')
     parser.add_argument('--lambda_adv', type=float, default=0.5,
                         help='Depth smoothness loss coefficient')
+    parser.add_argument('--time_code_dim', type=float, default=1024,
+                        help='Set dimension of dynamic latent codes')
+
 
     # Losses
     parser.add_argument("--gan_loss", type=str, default=None, choices=["naive", "lsgan"],

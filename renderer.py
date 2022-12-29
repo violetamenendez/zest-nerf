@@ -167,7 +167,7 @@ def batchify(fn, chunk):
 
 def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
               volume_feature=None, imgs=None, img_feat=None, network_fn=None,
-              embedding_pts=None, embedding_dir=None, white_bkgd=False):
+              embedding_pts=None, embedding_dir=None, time_codes=None, white_bkgd=False):
     """
     rays_dir: [N, N_rays, 3] (e.g. [N,1024,3])
     """
@@ -180,7 +180,11 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
         +","+str("network_fn" if network_fn is not None else "None") \
         +","+str("embedding_pts" if embedding_pts is not None else "None") \
         +","+str("embedding_dir" if embedding_dir is not None else "None") \
+        +","+str(time_codes.shape if time_codes is not None else "None") \
         +","+str(white_bkgd))
+
+    if time_codes is not None:
+        print("rendering has time codes", time_codes.shape)
 
     # rays angle
     cos_angle = torch.norm(rays_dir, dim=-1) # [N, N_rays]
@@ -197,10 +201,16 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                                rays_ndc, args.feat_dim, img_feat,
                                args.img_downscale, args.use_color_volume, args.net_type)
 
+    if time_codes is not None:
+        N, N_rays, N_samples, _ = pts.shape
+        time_codes = torch.expand(N, N_rays, N_samples, -1)
+
     pts = rays_ndc
     if embedding_pts:
         pts = embedding_pts(rays_ndc)
 
+    if time_codes is not None:
+        pts = torch.cat((pts, time_codes), dim=-1)
     if input_feat is not None:
         pts = torch.cat((pts, input_feat), dim=-1)
 

@@ -144,6 +144,9 @@ class Renderer(nn.Module):
         logging.info("inputs "+","+str(input_pts.shape)+"," \
             +str(input_feats.shape)+","+str(input_views.shape))
 
+        if time_codes is not None:
+            print("NeRF time codes:", time_codes.shape)
+
         # Encode inputs
         pts = input_pts
         bias = self.pts_bias(input_feats)
@@ -334,7 +337,10 @@ class MVSNeRF_G(nn.Module):
 
         return (data - mean) / std
 
-    def forward(self, x, step=0):
+    def forward(self, x, step=0, time_codes=None):
+        if time_codes is not None:
+            print("generator has time codes", time_codes.shape)
+
         imgs = x['images']
         proj_mats = x['proj_mats']
         near_fars = x['near_fars']
@@ -371,6 +377,7 @@ class MVSNeRF_G(nn.Module):
                                                            network_fn=self.nerf,
                                                            embedding_pts=self.embedding_pts,
                                                            embedding_dir=self.embedding_dir,
+                                                           time_codes=time_codes,
                                                            white_bkgd=self.args.white_bkgd)
 
         depth_pred = depth_pred.unsqueeze(-1)
