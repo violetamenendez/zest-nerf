@@ -100,6 +100,7 @@ class MVSNeRFSystem(LightningModule):
             self.models += [self.nerf_fine]
 
         # Encoding volume (creates cost volume and then enc vol)
+        self.encoding_net = None
         if use_mvs:
             self.encoding_net = MVSNet()
             self.models += [self.encoding_net]
