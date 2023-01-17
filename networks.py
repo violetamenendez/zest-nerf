@@ -144,8 +144,8 @@ class Renderer(nn.Module):
         logging.info("inputs "+","+str(input_pts.shape)+"," \
             +str(input_feats.shape)+","+str(input_views.shape))
 
-        if time_codes is not None:
-            print("NeRF time codes:", time_codes.shape)
+        # if time_codes is not None:
+        #     print("NeRF time codes:", time_codes.shape)
 
         # Encode inputs
         pts = input_pts

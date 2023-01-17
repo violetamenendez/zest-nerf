@@ -81,7 +81,7 @@ class MVSNeRFSystem(LightningModule):
         self.time_codes = None
         if self.hparams.train_video:
             print("Training video...")
-            self.num_frames = 30
+            self.num_frames = 40
             self.time_codes = torch.normal(mean=0.0,
                                            std=(0.01/math.sqrt(int(self.hparams.time_code_dim))),
                                            size=(int(self.num_frames),int(self.hparams.time_code_dim)))
@@ -158,7 +158,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'llff':
             kwargs['depth_path'] = self.hparams.depth_path
         if self.hparams.dataset_name == 'neural3Dvideo':
-            kwargs['frame'] = 1
+            kwargs['train_key_frames'] = self.hparams.key_frames
         self.train_dataset = dataset(self.hparams.datadir,
                                      split='train',
                                      config_dir=self.hparams.configdir,
@@ -197,7 +197,13 @@ class MVSNeRFSystem(LightningModule):
         optimizers, schedulers = [], []
 
         # Generator optimiser
-        self.opt_G = torch.optim.Adam(self.generator.parameters(), lr=self.hparams.lrate, betas=(0.9, 0.999))
+        parameters = [{'params': self.generator.parameters()}]
+        if self.hparams.train_video:
+            parameters.append({'params': self.time_codes, 'lr': self.hparams.lrate*10})
+
+        self.opt_G = torch.optim.Adam(parameters,
+                                      lr=self.hparams.lrate,
+                                      betas=(0.9, 0.999))
         scheduler_G = CosineAnnealingLR(self.opt_G, T_max=self.hparams.num_epochs, eta_min=eps)
         optimizers.append(self.opt_G)
         schedulers.append(scheduler_G)
@@ -215,6 +221,12 @@ class MVSNeRFSystem(LightningModule):
             scheduler_depth_d = CosineAnnealingLR(self.opt_depth_D, T_max=self.hparams.num_epochs, eta_min=eps)
             optimizers.append(self.opt_depth_D)
             schedulers.append(scheduler_depth_d)
+
+        # if self.hparams.train_video:
+        #     self.opt_t = torch.optim.Adam([self.time_codes], lr=self.hparams.lrate*10, betas=(0.9, 0.999))
+        #     scheduler_t = CosineAnnealingLR(self.opt_t, T_max=self.hparams.num_epochs, eta_min=eps)
+        #     optimizers.append(self.opt_t)
+        #     schedulers.append(scheduler_t)
 
         return optimizers, schedulers
 
@@ -257,9 +269,11 @@ class MVSNeRFSystem(LightningModule):
         if self.time_codes is not None:
             print("training forward has time codes", self.time_codes.shape)
 
+        time_code = self.time_codes[data_mvs['keyframe_id']].to(self.device) if self.time_codes is not None else None
+
         rgb, target_s, depth_pred, depth, weights, t_vals = self.generator(data_mvs,
                                                                            self.global_step,
-                                                                           time_codes=self.time_codes)
+                                                                           time_codes=time_code)
 
         return {'rgb': rgb,
                 'target_s': target_s,
@@ -430,6 +444,7 @@ class MVSNeRFSystem(LightningModule):
         imgs, proj_mats = batch['images'], batch['proj_mats']
         near_fars = batch['near_fars']
         depths = batch['depths_h']
+        time_code = self.time_codes[batch['keyframe_id']].to(self.device) if self.time_codes is not None else None
 
         self.encoding_net.train()
         N, V, C, H, W = imgs.shape
@@ -470,7 +485,7 @@ class MVSNeRFSystem(LightningModule):
                                                                     network_fn=self.nerf_coarse,
                                                                     embedding_pts=self.embedding_xyz,
                                                                     embedding_dir=self.embedding_dir,
-                                                                    time_codes=self.time_codes,
+                                                                    time_codes=time_code,
                                                                     white_bkgd=self.hparams.white_bkgd)
                 rgbs.append(rgb.squeeze(0));depth_preds.append(depth_pred.squeeze(0))
                 logging.info("render outs rgb depth "+str(rgb.shape)+", "+str(depth_pred.shape))

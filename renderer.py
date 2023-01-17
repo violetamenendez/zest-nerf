@@ -202,8 +202,8 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                                args.img_downscale, args.use_color_volume, args.net_type)
 
     if time_codes is not None:
-        N, N_rays, N_samples, _ = pts.shape
-        time_codes = torch.expand(N, N_rays, N_samples, -1)
+        N, N_rays, N_samples, _ = rays_ndc.shape
+        time_codes = time_codes.expand(N, N_rays, N_samples, -1)
 
     pts = rays_ndc
     if embedding_pts:

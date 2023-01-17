@@ -70,6 +70,8 @@ def config_parser(cmd=None):
                         help='number of batches to accumulate gradients over')
     parser.add_argument('--train_video', action='store_true',
                         help='training of a dynamic scene')
+    parser.add_argument('--key_frames', action='store_true',
+                        help='training over keyframes of a video')
 
     # Hyperparameters
     parser.add_argument("--lrate", type=float, default=5e-4,

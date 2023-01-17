@@ -159,7 +159,8 @@ def create_spheric_poses(radius, n_poses=120):
 class Neural3DvideoDataset(Dataset):
     def __init__(self, root_dir, config_dir, split='train', spheric_poses=True,
                  load_ref=False, downSample=1.0, pair_idx=None, max_len=-1,
-                 scene=None, depth_path=None, closest_views=False, frame=1):
+                 scene=None, depth_path=None, closest_views=False,
+                 train_key_frames=False, keyframe_interval=30):
         """
         spheric_poses: whether the images are taken in a spheric inward-facing manner
                        default: False (forward-facing)
@@ -168,7 +169,8 @@ class Neural3DvideoDataset(Dataset):
         self.root_dir = Path(root_dir)
         self.config_dir = Path(config_dir)
         self.split = split
-        self.frame = frame
+        self.train_key_frames = train_key_frames # Train only over key_frames
+        self.keyframe_interval = keyframe_interval
         self.downSample = downSample
         self.img_wh = (int(960*downSample),int(640*downSample))
         assert self.img_wh[0] % 32 == 0 or self.img_wh[1] % 32 == 0, \
@@ -183,10 +185,23 @@ class Neural3DvideoDataset(Dataset):
                                         [0, 0, 0, 1]])
 
         self.build_metas(scene)
+
         # print(len(self.metas))
-        # print(self.image_paths)
+        # idx = 354
+        # print(self.metas[idx])
+        # scene, camid, t = self.metas[idx]
+        # print(self.cameras[scene][camid])
+        # print(self.image_paths[scene][self.cameras[scene][camid]][t])
+        # print(self.key_frames[scene])
         # exit()
+
         self.build_proj_mats()
+
+        # print(self.proj_mats[scene].shape)
+        # print(self.intrinsics[scene].shape)
+        # print(self.world2cams[scene].shape)
+        # print(self.cam2worlds[scene].shape)
+        # exit()
         self.white_back = False
 
         self.scale_factor = 1.0 / 200 # scale factor for DTU depth maps
@@ -203,21 +218,27 @@ class Neural3DvideoDataset(Dataset):
         else:
             self.scenes = [scene]
 
-        self.image_paths, self.cameras = {}, {}
+        self.image_paths, self.cameras, self.key_frames = {}, {}, {}
         self.metas = []
         for scene in self.scenes:
             scene_path = self.root_dir / scene
-            self.cameras[scene] = sorted(c.stem for c in scene_path.glob('*') if c.stem != "poses_bounds")
-            # Generate metas (target camera ID for each scene)
-            view_ids = list(range(len(self.cameras[scene])))
-            for id in view_ids:
-                self.metas += [(scene, id, view_ids.copy())]
+            self.cameras[scene] = sorted(c.stem for c in scene_path.glob('*') if c.stem != "poses_bounds") # e.g., cam00, cam07...
 
-            # Generate image paths for each scene and camera
             self.image_paths[scene] = {}
-            for cam in self.cameras[scene]:
+            for cam_id, cam in enumerate(self.cameras[scene]):
                 cam_path = scene_path / cam
+
+                # Generate image paths for each scene and camera view
                 self.image_paths[scene][cam] = sorted(cam_path.glob('*'))
+                num_frames = len(self.image_paths[scene][cam])
+
+                self.key_frames[scene] = {}
+                interval = self.keyframe_interval if self.train_key_frames else 1
+                for frame_id, frame_t in enumerate(range(0, num_frames, interval)):
+                    # Metas: (scene_name, cam_id, time, image_path)
+                    # Size of datase = num_scenes * num_cams * num_frames
+                    self.metas += [(scene, cam_id, frame_t)]
+                    self.key_frames[scene][frame_t] = frame_id
 
     def build_proj_mats(self):
         """
@@ -322,7 +343,8 @@ class Neural3DvideoDataset(Dataset):
         return len(self.metas) if self.max_len <= 0 else self.max_len
 
     def __getitem__(self, idx):
-        scene, target_view, src_views = self.metas[idx]
+        scene, target_view, frame_t = self.metas[idx]
+        print(f"Selected target {scene}, {target_view}, {frame_t}")
 
         # Returns a list of all camera poses ordered from nearest to farthest
         nearest_pose_ids = get_nearest_pose_ids(self.cam2worlds[scene][target_view],
@@ -337,7 +359,7 @@ class Neural3DvideoDataset(Dataset):
             nearest_pose_ids = nearest_pose_ids[:5]
         else:
             # Get far views with re. target image
-            nearest_pose_ids = nearest_pose_ids[-10:]
+            nearest_pose_ids = nearest_pose_ids[-8:]
 
         # Select views
         if self.split=='train':
@@ -354,12 +376,6 @@ class Neural3DvideoDataset(Dataset):
         near_far_source = torch.Tensor([self.bounds[scene][view_ids].min()*0.8, self.bounds[scene][view_ids].max()*1.2])
 
         for i, vid in enumerate(view_ids):
-            if vid == target_view:
-                frames = [self.frame]
-            else:
-                frames = [self.frame, self.frame-1]
-
-            for frame in frames:
                 intrinsics.append(self.intrinsics[scene][vid])
                 w2cs.append(self.world2cams[scene][vid])
                 c2ws.append(self.cam2worlds[scene][vid])
@@ -373,8 +389,8 @@ class Neural3DvideoDataset(Dataset):
                     proj_mats += [proj_mat_ls @ ref_proj_inv]
 
                 # Get image
-                cam = self.cameras[scene][vid]
-                img = Image.open(self.image_paths[scene][cam][frame]).convert('RGB')
+                cam = self.cameras[scene][vid] # id -> name (e.g. 0 -> cam00)
+                img = Image.open(self.image_paths[scene][cam][frame_t]).convert('RGB')
                 img = img.resize(self.img_wh, Image.LANCZOS)
                 img = self.transform(img)  # (3, h, w)
                 imgs.append(self.src_transform(img))
@@ -396,7 +412,10 @@ class Neural3DvideoDataset(Dataset):
         sample['near_fars'] = torch.stack(near_fars).float()
         sample['proj_mats'] = torch.from_numpy(np.stack(proj_mats)[:,:3]).float()
         sample['intrinsics'] = torch.stack(intrinsics).float()  # (V, 3, 3)
+        sample['time'] = frame_t
+        sample['keyframe_id'] = self.key_frames[scene][frame_t]
 
-        print("image shape", sample['images'].shape)
+        # print("image shape", sample['images'].shape)
+        # exit()
 
         return sample
