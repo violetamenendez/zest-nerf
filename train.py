@@ -695,7 +695,8 @@ def main():
                       check_val_every_n_epoch = max(system.hparams.num_epochs//system.hparams.N_vis,1),
                       benchmark=True,
                       precision=system.hparams.precision,
-                      accumulate_grad_batches=hparams.acc_grad)
+                      accumulate_grad_batches=hparams.acc_grad,
+                      gradient_clip_val=1)
 
     trainer.fit(system)
     torch.cuda.empty_cache()
