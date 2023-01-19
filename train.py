@@ -668,11 +668,9 @@ def main():
                                           save_top_k=5,
                                           save_last=True)
 
-    logger = loggers.TestTubeLogger(
+    logger = loggers.WandbLogger(
         save_dir=hparams.save_dir,
-        name=hparams.expname,
-        debug=False,
-        create_git_tag=False
+        name=hparams.expname
     )
 
     # Load checkpoints from given path or resume from existing
@@ -683,22 +681,20 @@ def main():
         resume_ckpt = save_dir_ckpts / 'last.ckpt'
 
     hparams.num_gpus = 1
-    trainer = Trainer(resume_from_checkpoint=resume_ckpt,
-                      max_epochs=hparams.num_epochs,
-                      checkpoint_callback=True,
+    trainer = Trainer(max_epochs=hparams.num_epochs,
                       callbacks=checkpoint_callback,
                       logger=logger,
-                      weights_summary=None,
-                      progress_bar_refresh_rate=1,
+                      enable_model_summary=False,
                       gpus=hparams.num_gpus,
-                      num_sanity_val_steps=1,
+                      num_sanity_val_steps=0,
                       check_val_every_n_epoch = max(system.hparams.num_epochs//system.hparams.N_vis,1),
                       benchmark=True,
                       precision=system.hparams.precision,
                       accumulate_grad_batches=hparams.acc_grad,
-                      gradient_clip_val=1)
+                      gradient_clip_val=1,
+                      detect_anomaly=True)
 
-    trainer.fit(system)
+    trainer.fit(system, ckpt_path=resume_ckpt)
     torch.cuda.empty_cache()
 
 if __name__ == '__main__':
