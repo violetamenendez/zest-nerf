@@ -67,8 +67,8 @@ class MVSNeRFSystem(LightningModule):
         self.idx = 0 # validation step counter
 
         # Losses
-        #self.loss = nn.MSELoss(reduction='mean')
-        self.loss = nn.L1Loss()
+        self.loss = nn.MSELoss(reduction='mean')
+        # self.loss = nn.L1Loss()
         self.criterionFeat = nn.L1Loss()
         self.tv_loss = total_variation_loss
         self.depth_smooth = get_disparity_smoothness
