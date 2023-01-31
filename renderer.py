@@ -233,10 +233,19 @@ def batchify(fn, chunk):
 
     return ret
 
+def run_network(network_fn, chunk, pts, alpha_only=False):
+    """Applies network to inputs and prepares outputs
+    """
+    outputs_flat = batchify(network_fn, chunk)(pts, alpha_only)
+    raw_outputs = torch.reshape(outputs_flat, list(pts.shape[:-1]) + [outputs_flat.shape[-1]])
+    return raw_outputs
+
+
+
 def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
-              volume_feature=None, imgs=None, img_feat=None,
-              embedding_pts=None, embedding_xyzt=None, embedding_dir=None,
-              time_codes=None):
+                volume_feature=None, imgs=None, img_feat=None,
+                embedding_pts=None, embedding_dir=None,
+                time_codes=None):
     """Prepares points to be fed to the network.
     Input:
     Output:
@@ -255,9 +264,6 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     # Use point embedder
     if embedding_pts:
         pts = embedding_pts(rays_ndc)
-    # Use point embedder for dynamic NeRF (NSFF)
-    if embedding_xyzt:
-        pts = embedding_xyzt(rays_ndc)
 
     # Use time codes for Neural 3D video
     if time_codes is not None:
@@ -267,10 +273,11 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
         pts = torch.cat((pts, time_codes), dim=-1)
 
     # Use features
-    if volume_feature:
+    input_feat = None
+    if volume_feature is not None:
         # sample volume feature at ray points
         input_feat = gen_pts_feats(imgs, volume_feature, rays_pts, data_mvs, rays_ndc, args.feat_dim, \
-                                img_feat, args.img_downscale, args.use_color_volume, args.net_type)
+                                   img_feat, args.img_downscale, args.use_color_volume, args.net_type)
         if input_feat is not None:
             pts = torch.cat((pts, input_feat), dim=-1)
 
@@ -285,7 +292,278 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
 
         pts = torch.cat([pts, angle], -1)
 
-    return pts, angle is None
+    alpha_only = angle is None
+
+    return pts, alpha_only, input_feat
+
+
+def prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
+                        frame_idx, volume_feature=None, imgs=None, img_feat=None,
+                        embedding_pts=None, embedding_dir=None):
+    """Prepares points to be fed to the network.
+    Input:
+    Output:
+        - pts: tensor containing (embedded) rays, time codes, input features, and viewing direction
+    """
+    device = rays_pts.device
+
+    # NOTE - frame_idx is the normalised index of the frame over time
+    img_idx_rep = torch.ones_like(rays_ndc[..., 0], device=device) * frame_idx
+    raw_pts = torch.cat([rays_ndc, img_idx_rep], -1)
+    pts, _, _ = prepare_pts(args, data_mvs, rays_pts, raw_pts, rays_dir, cos_angle,
+                            volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
+                            embedding_pts=embedding_pts, embedding_dir=embedding_dir)
+    return raw_pts, pts
+
+
+
+def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
+                  dists, cos_angle, volume_feature=None, imgs=None, img_feat=None,
+                  network_fn=None, embedding_pts=None, embedding_dir=None,
+                  time_codes=None, white_bkgd=False, scene_flow=False):
+    """Render static NeRF (classic NeRF)
+
+    Input:
+        args: hyperparams.
+        data_mvs: dict containing mvs information, pose, extrinsic, intrinsics...
+        rays_pts: [N, N_rays, 3] point samples. Used for sampling encoding volume.
+        rays_ndc: [N, N_rays, 3] points in normalised device coordinate system to feed NeRF.
+        depth_candidates: [N_rays, N_samples] distance between each integration point along a ray.
+        rays_dir: [N, N_rays, 3] point directions.
+        volume_feature: encoding volume.
+        imgs:[N V 3 H W] input images
+        img_feat: img features
+        network_fn: NeRF function
+        embedding_pts: embedding function for points
+        embedding_dir: embedding function for directions
+        time_codes: latent tensors to learn time
+        white_bkgd: bool
+        scene_flow: bool. If true the net predicts blending weights to blend with the dynamic net.
+    """
+
+    # Prepare input to the network
+    pts, alpha_only, input_feat = prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
+                                  volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
+                                  embedding_pts=embedding_pts, embedding_dir=embedding_dir,
+                                  time_codes=time_codes)
+
+    # Static NeRF
+    raw_static = run_network(network_fn, args.netchunk, pts, alpha_only)
+    # raw = all the colours and densities of every sample point at every ray
+
+    raw_rgba = raw_static[..., :4]
+    raw_blend_w = raw_static[..., 4] if scene_flow else None # Blending weights
+
+    rgb_map, disp_map, acc_map, weights, depth_map, alpha = raw2outputs(raw_rgba,
+                                                                        depth_candidates,
+                                                                        dists, white_bkgd)
+
+    ret = {'rgb_map': rgb_map,
+           'depth_map': depth_map,
+           'raw_rgba': raw_rgba,
+           'input_feat': input_feat,
+           'weights': weights,
+           'raw_blend_w': raw_blend_w,
+           'alpha': alpha}
+
+    return ret
+
+
+
+
+def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
+                   dists, cos_angle, raw_rgba, raw_blend_w, ref_frame_idx, num_frames,
+                   chain_bwd, chain_5frames, volume_feature=None, imgs=None, img_feat=None,
+                   network_fn=None, embedding_pts=None, embedding_dir=None):
+    """Render dynamic NeRF (Neural Scene Flow Fields https://github.com/zhengqili/Neural-Scene-Flow-Fields)
+
+    Input:
+        args: hyperparams.
+        data_mvs: dict containing mvs information, pose, extrinsic, intrinsics...
+        rays_pts: [N, N_rays, 3] point samples. Used for sampling encoding volume.
+        rays_ndc: [N, N_rays, 3] points in normalised device coordinate system to feed NeRF.
+        depth_candidates: [N_rays, N_samples] distance between each integration point along a ray.
+        rays_dir: [N, N_rays, 3] point directions.
+        raw_rgba: [N, N_rays, 3] static NeRF rgba outputs
+        raw_blend_w: [N, N_rays] blending weights for static + dynamic NeRF outputs.
+        ref_frame_idx: float. index of the reference frame normalised to the total number of frames.
+        num_frames: float. total number of frames (time) in scene.
+        chain_bwd: bool. two-frame chain loss
+        chain_5frames: bool. chain five frames (+-2 neighbours of reference frame)
+        volume_feature: encoding volume.
+        imgs:[N V 3 H W] input images
+        img_feat: img features
+        network_fn: NeRF function
+        embedding_pts: embedding function for points
+        embedding_dir: embedding function for directions
+        time_codes: latent tensors to learn time
+        white_bkgd: bool
+        scene_flow: bool. If true the net predicts blending weights to blend with the dynamic net.
+    """
+
+    #####################
+    # Reference frame t #
+    #####################
+
+    # Prepare temporal pts for Dynamic NeRF
+    raw_pts_ref, pts_ref = prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc,
+                                               rays_dir, cos_angle, ref_frame_idx,
+                                               volume_feature=volume_feature,
+                                               imgs=imgs, img_feat=img_feat,
+                                               embedding_pts=embedding_pts,
+                                               embedding_dir=embedding_dir)
+
+    # Apply DyNeRF to reference time t
+    raw_ref_t = run_network(network_fn, args.netchunk, pts_ref)
+    raw_rgba_ref = raw_ref_t[..., :4] # rgb colour and alpha density
+    raw_sf_ref2prev = raw_ref_t[..., 4:7] # scene flow from reference frame to previous frame
+    raw_sf_ref2post = raw_ref_t[..., 7:10] # scene flow from reference frame to following frame
+    raw_prob_ref2prev = raw_ref_t[:, :, 10] # confidence?
+    raw_prob_ref2post = raw_ref_t[:, :, 11] # confidence?
+
+    # Render blended NeRFs (static + dynamic)
+    rgb_map_ref, depth_map_ref, \
+    rgb_map_ref_dy, depth_map_ref_dy, \
+    weights_ref_dy, weights_ref_dd = raw2outputs_blending(raw_rgba_ref, raw_rgba, raw_blend_w,
+                                                          depth_candidates, dists, 0)
+
+    # Blended weights (static w + dynamic w)
+    weights_map_dd = torch.sum(weights_ref_dd, -1).detach()
+
+    ret = {'rgb_map_ref': rgb_map_ref, # RGB map with blended weights
+           'depth_map_ref' : depth_map_ref, # Depth map with both weights
+           'rgb_map_ref_dy': rgb_map_ref_dy, # RGB map with dynamic weights only
+           'depth_map_ref_dy': depth_map_ref_dy, # depth map with dynamic weights only
+           'weights_map_dd': weights_map_dd} # dynamic blending weights with rigid weights ??
+
+    # TODO - only in training mode?
+    ret['raw_sf_ref2prev'] = raw_sf_ref2prev
+    ret['raw_sf_ref2post'] = raw_sf_ref2post
+    ret['raw_pts_ref'] = raw_pts_ref[..., :3]
+    ret['weights_ref_dy'] = weights_ref_dy # weights_ref_dy, weights with dynamic alpha only
+    ret['raw_blend_w'] = raw_blend_w
+    ret['raw_prob_ref2prev'] = raw_prob_ref2prev
+    ret['raw_prob_ref2post'] = raw_prob_ref2post
+
+    ######################
+    # Previous frame t-1 #
+    ######################
+
+    # Points for previous frame according to the estimated scene flow + time
+    prev_frame_idx = ref_frame_idx - 1./num_frames * 2.
+    prev_rays_ndc = rays_ndc + raw_sf_ref2prev
+    raw_pts_prev, pts_prev = prepare_dynamic_pts(args, data_mvs, rays_pts, prev_rays_ndc,
+                                                 rays_dir, cos_angle, prev_frame_idx,
+                                                 volume_feature=volume_feature,
+                                                 imgs=imgs, img_feat=img_feat,
+                                                 embedding_pts=embedding_pts,
+                                                 embedding_dir=embedding_dir)
+
+    # Apply DyNeRF to previous time t - 1
+    raw_prev = run_network(network_fn, args.netchunk, pts_prev)
+    raw_rgba_prev = raw_prev[:, :, :4]
+    raw_sf_prev2prevprev = raw_prev[:, :, 4:7]
+    raw_sf_prev2ref = raw_prev[:, :, 7:10]
+    ret['raw_pts_prev'] = raw_pts_prev[..., :3]
+
+    # render from t - 1
+    rgb_map_prev_dy, _, _, weights_prev_dy, _, _ = raw2outputs(raw_rgba_prev, depth_candidates, dists)
+    ret['raw_sf_prev2ref'] = raw_sf_prev2ref
+    ret['rgb_map_prev_dy'] = rgb_map_prev_dy
+
+    #######################
+    # Following frame t+1 #
+    #######################
+
+    # Points for the 'posterior' frame according to the estimated scene flow + time
+    post_frame_idx = ref_frame_idx + 1./num_frames * 2.
+    post_rays_ndc = rays_ndc + raw_sf_ref2post
+    raw_pts_post, pts_post = prepare_dynamic_pts(args, data_mvs, rays_pts, post_rays_ndc,
+                                                 rays_dir, cos_angle, post_frame_idx,
+                                                 volume_feature=volume_feature,
+                                                 imgs=imgs, img_feat=img_feat,
+                                                 embedding_pts=embedding_pts,
+                                                 embedding_dir=embedding_dir)
+
+    # Apply DyNeRF to next time t + 1
+    raw_post = run_network(network_fn, args.netchunk, pts_post)
+    raw_rgba_post = raw_post[:, :, :4]
+    raw_sf_post2ref = raw_post[:, :, 4:7]
+    raw_sf_post2postpost = raw_post[:, :, 7:10]
+    ret['raw_pts_post'] = raw_pts_post[..., :3]
+
+    # render from t + 1
+    rgb_map_post_dy, _, _, weights_post_dy, _, _ = raw2outputs(raw_rgba_post, depth_candidates, dists)
+    ret['raw_sf_post2ref'] = raw_sf_post2ref
+    ret['rgb_map_post_dy'] = rgb_map_post_dy
+
+    ######################
+
+    # Calculate a probability map of the alpha compositing
+    # weights according to the estimated confidence
+    prob_map_prev = compute_2d_prob(weights_prev_dy, raw_prob_ref2prev)
+    prob_map_post = compute_2d_prob(weights_post_dy, raw_prob_ref2post)
+    ret['prob_map_prev'] = prob_map_prev
+    ret['prob_map_post'] = prob_map_post
+
+    # two-frames chain loss
+    if chain_bwd:
+        ###############################
+        # Previous-previous frame t-2 #
+        ###############################
+
+        # Points for prevprev frame according to the estimated scene flow t - 2
+        prevprev_frame_idx = ref_frame_idx - 2./num_frames * 2.
+        prevprev_rays_ndc = raw_pts_prev[..., :3] + raw_sf_prev2prevprev
+        raw_pts_prevprev, pts_prevprev = prepare_dynamic_pts(args, data_mvs, rays_pts, prevprev_rays_ndc,
+                                                    rays_dir, cos_angle, prevprev_frame_idx,
+                                                    volume_feature=volume_feature,
+                                                    imgs=imgs, img_feat=img_feat,
+                                                    embedding_pts=embedding_pts,
+                                                    embedding_dir=embedding_dir)
+        ret['raw_pts_pp'] = raw_pts_prevprev[..., :3]
+        if chain_5frames:
+            # Apply DyNeRF to prevprev time t - 2
+            raw_prevprev = run_network(network_fn, args.netchunk, pts_prevprev)
+            raw_rgba_prevprev = raw_prevprev[..., :4]
+
+            # render from t - 2
+            rgb_map_prevprev_dy, _, _, weights_prevprev_dy, _, _ = raw2outputs(raw_rgba_prevprev,
+                                                                                depth_candidates,
+                                                                                dists)
+            ret['rgb_map_pp_dy'] = rgb_map_prevprev_dy
+        ###############################
+
+    else:
+        #######################
+        # Next-next frame t+2 #
+        #######################
+
+        # Points for postpost frame according to the estimated scene flow t + 2
+        postpost_frame_idx = ref_frame_idx + 2./num_frames * 2.
+        postpost_rays_ndc = raw_pts_post[..., :3] + raw_sf_post2postpost
+        raw_pts_postpost, pts_postpost = prepare_dynamic_pts(args, data_mvs, rays_pts, postpost_rays_ndc,
+                                                    rays_dir, cos_angle, postpost_frame_idx,
+                                                    volume_feature=volume_feature,
+                                                    imgs=imgs, img_feat=img_feat,
+                                                    embedding_pts=embedding_pts,
+                                                    embedding_dir=embedding_dir)
+        ret['raw_pts_pp'] = raw_pts_postpost[..., :3]
+
+        if chain_5frames:
+            # Apply DyNeRF to postpost time t + 2
+            raw_postpost = run_network(network_fn, args.netchunk, pts_postpost)
+            raw_rgba_postpost = raw_postpost[:, :, :4]
+
+            # render from t + 2
+            rgb_map_postpost_dy, _, _, weights_postpost_dy, _, _ = raw2outputs(raw_rgba_postpost,
+                                                                                depth_candidates,
+                                                                                dists)
+            ret['rgb_map_pp_dy'] = rgb_map_postpost_dy
+        #######################
+    return ret
+
+
 
 def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
               volume_feature=None, imgs=None, img_feat=None, network_fn=None,
@@ -306,137 +584,26 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
         +","+str(time_codes.shape if time_codes is not None else "None") \
         +","+str(white_bkgd))
 
-    device = rays_pts.device
-
     # rays angle
     cos_angle = torch.norm(rays_dir, dim=-1) # [N, N_rays]
 
     # Distance between ray intervals
     dists = depth2dist(depth_candidates, cos_angle)
 
-    # Prepare input to the network
-    pts, alpha_only = prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
-                                  volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
-                                  embedding_pts=embedding_pts, embedding_dir=embedding_dir,
-                                  time_codes=time_codes)
+    ret = render_static(args, data_mvs, rays_pts, rays_ndc,
+                        depth_candidates, rays_dir, dists,
+                        cos_angle, volume_feature=volume_feature, imgs=imgs,
+                        img_feat=img_feat, network_fn=network_fn,
+                        embedding_pts=embedding_pts, embedding_dir=embedding_pts,
+                        time_codes=time_codes, white_bkgd=white_bkgd,
+                        scene_flow=scene_flow)
 
-    # Static NeRF
-    outputs_flat = batchify(network_fn, args.netchunk)(pts, alpha_only)
-
-    raw_static = torch.reshape(outputs_flat, list(pts.shape[:-1]) + [outputs_flat.shape[-1]])
-    # raw = all the colours and densities of every sample point at every ray
-
-    raw_rgba = raw_static[..., :4]
-
-    rgb_map, disp_map, acc_map, weights, depth_map, alpha = raw2outputs(raw_rgba,
-                                                                        depth_candidates,
-                                                                        dists, white_bkgd,
-                                                                        args.net_type)
     if scene_flow:
-        # Blending weights
-        raw_blend_w = raw_static[..., 4] #.squeeze()
+        ret_dy = render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates,
+                                rays_dir, dists, cos_angle,  ret['raw_rgba'], ret['raw_blend_w'],
+                                ref_frame_idx, num_frames, chain_bwd, chain_5frames,
+                                volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
+                                network_fn=network_fn_dy, embedding_pts=embedding_xyzt, embedding_dir=embedding_dir)
+        ret.update(ret_dy)
 
-        # Prepare temporal pts for Dynamic NeRF
-        # Add time dimension
-        img_idx_rep = torch.ones_like(rays_ndc[..., 0], device=device) * img_idx # NOTE - img_idx is the normalised time [-1,1]
-        pts_ref = torch.cat([rays_ndc, img_idx_rep], -1)
-        pts_ref_t, _ = prepare_pts(args, data_mvs, rays_pts, pts_ref, rays_dir, cos_angle,
-                               volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
-                               embedding_xyzt=embedding_xyzt, embedding_dir=embedding_dir,
-                               time_codes=time_codes)
-        # TODO - embedding
-
-        # Dynamic NeRF - applied to reference time t
-        out_ref_t = batchify(network_fn_dy, args.netchunk)(pts_ref_t) # Apply nerf to points by chunks
-        raw_ref_t = torch.reshape(out_ref_t, list(pts_ref_t.shape[:-1]) + [out_ref_t.shape[-1]])
-        raw_rgba_ref = raw_ref_t[..., :4] # rgb colour and alpha density
-        raw_sf_ref2prev = raw_ref_t[..., 4:7] # scene flow from reference frame to previous frame
-        raw_sf_ref2post = raw_ref_t[..., 7:10] # scene flow from reference frame to following frame
-        raw_prob_ref2prev = raw_ref_t[:, :, 10] # confidence?
-        raw_prob_ref2post = raw_ref_t[:, :, 11] # confidence?
-
-        rgb_map_ref, depth_map_ref, \
-        rgb_map_ref_dy, depth_map_ref_dy, \
-        weights_ref_dy, weights_ref_dd = raw2outputs_blending(raw_rgba_ref, raw_rgba, raw_blend_w,
-                                              depth_candidates, dists, 0)
-
-        weights_map_dd = torch.sum(weights_ref_dd, -1).detach()
-
-        ret = {'rgb_map_ref': rgb_map_ref,
-               'depth_map_ref' : depth_map_ref,
-               'rgb_map_rig': rgb_map,
-               'depth_map_rig': depth_map,
-               'rgb_map_ref_dy': rgb_map_ref_dy,
-               'depth_map_ref_dy': depth_map_ref_dy,
-               'weights_map_dd': weights_map_dd}
-        # This is the only necessary returns at inference time. So we need a different rendering for val/test
-
-        # When training we also need:
-        ret['raw_sf_ref2prev'] = raw_sf_ref2prev
-        ret['raw_sf_ref2post'] = raw_sf_ref2post
-        ret['raw_pts_ref'] = pts_ref[..., :3]
-        ret['weights_ref_dy'] = weights_ref_dy
-        ret['raw_blend_w'] = raw_blend_w
-        ret['raw_prob_ref2prev'] = raw_prob_ref2prev
-        ret['raw_prob_ref2post'] = raw_prob_ref2post
-
-        ### Previous Frame ###
-
-        # Points for previous frame according to the estimated scene flow + time
-        img_idx_rep_prev = torch.ones_like(rays_ndc[..., 0], device=device) * (img_idx - 1./num_img * 2.) # time representation index
-        pts_prev = torch.cat([(rays_ndc + raw_sf_ref2prev), img_idx_rep_prev] , -1)
-        pts_prev_t, _ = prepare_pts(args, data_mvs, rays_pts, pts_prev, rays_dir, cos_angle,
-                                    volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
-                                    embedding_xyzt=embedding_xyzt, embedding_dir=embedding_dir,
-                                    time_codes=time_codes)
-
-        # Dynamic NeRF - applied to previous time t - 1
-        out_prev_t = batchify(network_fn_dy, args.netchunk)(pts_prev_t)
-        raw_prev = torch.reshape(out_prev_t, list(pts_prev_t.shape[:-1]) + [out_prev_t.shape[-1]])
-        raw_rgba_prev = raw_prev[:, :, :4]
-        raw_sf_prev2prevprev = raw_prev[:, :, 4:7]
-        raw_sf_prev2ref = raw_prev[:, :, 7:10]
-        ret['raw_pts_prev'] = pts_prev[..., :3]
-
-        # render from t - 1 rgb_map, disp_map, acc_map, weights, depth_map, alpha
-        rgb_map_prev_dy, _, _, weights_prev_dy, _, _ = raw2outputs(raw_rgba_prev, depth_candidates, dists)
-        ret['raw_sf_prev2ref'] = raw_sf_prev2ref
-        ret['rgb_map_prev_dy'] = rgb_map_prev_dy
-
-        ######################
-
-        ##### Next Frame #####
-
-        # Points for the posterior frame according to the estimated scene flow + time
-        img_idx_rep_post = torch.ones_like(rays_ndc[..., 0], device=device) * (img_idx + 1./num_img * 2.) # time representation index
-        pts_post = torch.cat([(rays_ndc + raw_sf_ref2post), img_idx_rep_post] , -1)
-        pts_post_t, _ = prepare_pts(args, data_mvs, rays_pts, pts_post, rays_dir, cos_angle,
-                                    volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
-                                    embedding_xyzt=embedding_xyzt, embedding_dir=embedding_dir,
-                                    time_codes=time_codes)
-
-        # render points at t + 1
-        out_post_t = batchify(network_fn_dy, args.netchunk)(pts_post_t)
-        raw_post = torch.reshape(out_post_t, list(pts_post_t.shape[:-1]) + [out_post_t.shape[-1]])
-        raw_rgba_post = raw_post[:, :, :4]
-        raw_sf_post2ref = raw_post[:, :, 4:7]
-        raw_sf_post2postpost = raw_post[:, :, 7:10]
-        ret['raw_pts_post'] = pts_post[..., :3]
-
-        rgb_map_post_dy, _, _, weights_post_dy, _, _ = raw2outputs(raw_rgba_post, depth_candidates, dists)
-        ret['raw_sf_post2ref'] = raw_sf_post2ref
-        ret['rgb_map_post_dy'] = rgb_map_post_dy
-
-        ######################
-
-        # Calculate confidence
-        prob_map_prev = compute_2d_prob(weights_prev_dy, raw_prob_ref2prev)
-        prob_map_post = compute_2d_prob(weights_post_dy, raw_prob_ref2post)
-        ret['prob_map_prev'] = prob_map_prev
-        ret['prob_map_post'] = prob_map_post
-
-        ## TODO chain two loss ##
-
-
-    logging.info("outputs "+str(rgb_map.shape)+","+str(input_feat.shape)+","+str(weights.shape)+","+str(depth_map.shape)+","+str(alpha.shape))
-    return rgb_map, input_feat, weights, depth_map, alpha, raw_blend_w
+    return ret
