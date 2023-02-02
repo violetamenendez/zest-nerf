@@ -463,9 +463,9 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
 
     # Apply DyNeRF to previous time t - 1
     raw_prev = run_network(network_fn, args.netchunk, pts_prev)
-    raw_rgba_prev = raw_prev[:, :, :4]
-    raw_sf_prev2prevprev = raw_prev[:, :, 4:7]
-    raw_sf_prev2ref = raw_prev[:, :, 7:10]
+    raw_rgba_prev = raw_prev[..., :4]
+    raw_sf_prev2prevprev = raw_prev[..., 4:7]
+    raw_sf_prev2ref = raw_prev[..., 7:10]
     ret['raw_pts_prev'] = raw_pts_prev[..., :3]
     ret['raw_sf_prev2ref'] = raw_sf_prev2ref
 
@@ -482,16 +482,16 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     post_rays_ndc = rays_ndc + raw_sf_ref2post
     raw_pts_post, pts_post = prepare_dynamic_pts(args, data_mvs, rays_pts, post_rays_ndc,
                                                  rays_dir, cos_angle, post_frame_idx,
-                                                 volume_feature=volume_feature,
+                                                 volume_feature=None,
                                                  imgs=imgs, img_feat=img_feat,
                                                  embedding_pts=embedding_pts,
                                                  embedding_dir=embedding_dir)
 
     # Apply DyNeRF to next time t + 1
     raw_post = run_network(network_fn, args.netchunk, pts_post)
-    raw_rgba_post = raw_post[:, :, :4]
-    raw_sf_post2ref = raw_post[:, :, 4:7]
-    raw_sf_post2postpost = raw_post[:, :, 7:10]
+    raw_rgba_post = raw_post[..., :4]
+    raw_sf_post2ref = raw_post[..., 4:7]
+    raw_sf_post2postpost = raw_post[..., 7:10]
     ret['raw_pts_post'] = raw_pts_post[..., :3]
     ret['raw_sf_post2ref'] = raw_sf_post2ref
 
@@ -519,7 +519,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         prevprev_rays_ndc = raw_pts_prev[..., :3] + raw_sf_prev2prevprev
         raw_pts_prevprev, pts_prevprev = prepare_dynamic_pts(args, data_mvs, rays_pts, prevprev_rays_ndc,
                                                              rays_dir, cos_angle, prevprev_frame_idx,
-                                                             volume_feature=volume_feature,
+                                                             volume_feature=None,
                                                              imgs=imgs, img_feat=img_feat,
                                                              embedding_pts=embedding_pts,
                                                              embedding_dir=embedding_dir)
@@ -546,7 +546,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         postpost_rays_ndc = raw_pts_post[..., :3] + raw_sf_post2postpost
         raw_pts_postpost, pts_postpost = prepare_dynamic_pts(args, data_mvs, rays_pts, postpost_rays_ndc,
                                                              rays_dir, cos_angle, postpost_frame_idx,
-                                                             volume_feature=volume_feature,
+                                                             volume_feature=None,
                                                              imgs=imgs, img_feat=img_feat,
                                                              embedding_pts=embedding_pts,
                                                              embedding_dir=embedding_dir)
@@ -555,7 +555,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         if chain_5frames:
             # Apply DyNeRF to postpost time t + 2
             raw_postpost = run_network(network_fn, args.netchunk, pts_postpost)
-            raw_rgba_postpost = raw_postpost[:, :, :4]
+            raw_rgba_postpost = raw_postpost[..., :4]
 
             # render from t + 2
             rgb_map_postpost_dy, _, _, weights_postpost_dy, _, _ = raw2outputs(raw_rgba_postpost,
