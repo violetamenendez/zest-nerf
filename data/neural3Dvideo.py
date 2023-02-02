@@ -230,14 +230,14 @@ class Neural3DvideoDataset(Dataset):
 
                 # Generate image paths for each scene and camera view
                 self.image_paths[scene][cam] = sorted(cam_path.glob('*'))
-                num_frames = len(self.image_paths[scene][cam])
+                num_frames = len(self.image_paths[scene][cam]) # total number of frames in scene
 
                 self.key_frames[scene] = {}
                 interval = self.keyframe_interval if self.train_key_frames else 1
                 for frame_id, frame_t in enumerate(range(0, num_frames, interval)):
                     # Metas: (scene_name, cam_id, time, image_path)
                     # Size of datase = num_scenes * num_cams * num_frames
-                    self.metas += [(scene, cam_id, frame_t)]
+                    self.metas += [(scene, cam_id, frame_t, num_frames)]
                     self.key_frames[scene][frame_t] = frame_id
 
     def build_proj_mats(self):
@@ -343,8 +343,8 @@ class Neural3DvideoDataset(Dataset):
         return len(self.metas) if self.max_len <= 0 else self.max_len
 
     def __getitem__(self, idx):
-        scene, target_view, frame_t = self.metas[idx]
-        print(f"Selected target {scene}, {target_view}, {frame_t}")
+        scene, target_view, frame_t, num_frames = self.metas[idx]
+        print(f"Selected target {scene}, {target_view}, {frame_t}, {num_frames}")
 
         # Returns a list of all camera poses ordered from nearest to farthest
         nearest_pose_ids = get_nearest_pose_ids(self.cam2worlds[scene][target_view],
@@ -413,6 +413,7 @@ class Neural3DvideoDataset(Dataset):
         sample['proj_mats'] = torch.from_numpy(np.stack(proj_mats)[:,:3]).float()
         sample['intrinsics'] = torch.stack(intrinsics).float()  # (V, 3, 3)
         sample['time'] = frame_t
+        sample['total_frames'] = num_frames
         sample['keyframe_id'] = self.key_frames[scene][frame_t]
 
         # print("image shape", sample['images'].shape)

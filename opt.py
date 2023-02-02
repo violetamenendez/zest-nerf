@@ -124,6 +124,9 @@ def config_parser(cmd=None):
                         help='enforce ray distortion loss')
     parser.add_argument('--with_perceptual_loss', action='store_true',
                         help='enforce ray distortion loss')
+    parser.add_argument('--with_chain_loss', action='store_true',
+                        help='perform 5 frame consistency loss if this flag is present, \
+                              otherwise perform 3 frame consistency. This will make training slower.')
     parser.add_argument("--depth_path", type=str, default=None,
                         help='GT depth for adversarial loss')
     parser.add_argument("--finetune_scene", type=str, default=None,

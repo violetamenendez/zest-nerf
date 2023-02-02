@@ -97,6 +97,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.train_sceneflow:
             self.embedding_xyzt = Embedding(self.hparams.pts_dim + 1, self.hparams.multires) if pts_embedder else None
             self.embeddings += [self.embedding_xyzt]
+            self.input_ch_dy = self.embedding_xyzt.out_channels if self.embedding_xyzt else self.hparams.pts_dim + 1
 
         # Define NeRF layer sizes depending on input channels
         self.input_ch = self.embedding_xyz.out_channels if self.embedding_xyz else self.hparams.pts_dim
@@ -111,7 +112,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.train_sceneflow:
             # NSFF dynamic + static NeRFs. See https://www.cs.cornell.edu/~zl548/NSFF/
             self.nerf_dynamic = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
-                 input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
+                 input_ch_pts=self.input_ch_dy, output_ch=self.output_ch, skips=skips,
                  input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
                  sceneflow=True, static=False)
             self.models += [self.nerf_dynamic]

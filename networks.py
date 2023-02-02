@@ -87,6 +87,7 @@ class Renderer(nn.Module):
         self.in_ch_feat = input_ch_feat
         self.predict_sceneflow = sceneflow
         self.static = static
+        self.in_feats = static # for now only use input features for static NeRF, in future we can change this
 
         # Points encoding layers
         self.pts_linears = nn.ModuleList()
@@ -149,23 +150,30 @@ class Renderer(nn.Module):
         """
         logging.info("STEP FORWARD")
 
-        input_pts, input_feats, input_views = torch.split(x, [self.in_ch_pts,
-                                                              self.in_ch_feat,
-                                                              self.in_ch_views],
-                                                          dim=-1)
-
-        logging.info("inputs "+","+str(input_pts.shape)+"," \
-            +str(input_feats.shape)+","+str(input_views.shape))
+        if self.in_feats:
+            input_pts, input_feats, input_views = torch.split(x, [self.in_ch_pts,
+                                                                  self.in_ch_feat,
+                                                                  self.in_ch_views],
+                                                              dim=-1)
+            logging.info("inputs "+","+str(input_pts.shape)+"," \
+                    +str(input_feats.shape)+","+str(input_views.shape))
+        else:
+            input_pts, input_views = torch.split(x, [self.in_ch_pts,
+                                                     self.in_ch_views],
+                                                 dim=-1)
 
         # if time_codes is not None:
         #     print("NeRF time codes:", time_codes.shape)
 
         # Encode inputs
         pts = input_pts
-        bias = self.pts_bias(input_feats)
+        if self.in_feats:
+            bias = self.pts_bias(input_feats)
 
         for i, layer in enumerate(self.pts_linears):
-            pts = layer(pts) * bias
+            pts = layer(pts)
+            if self.in_feats:
+                pts *= bias
             pts = F.relu(pts)
             if i in self.skips:
                 pts = torch.cat([input_pts, pts], -1)
@@ -436,6 +444,8 @@ class DyMVSNeRF_G(nn.Module):
         # Parameters
         self.N_rays = args.batch_size
         self.N_samples = args.N_samples
+        self.chain_bwd = False
+        self.chain_5frames = args.with_chain_loss
         self.args = args
 
     def unpreprocess(self, data, shape=(1,1,3,1,1)):
@@ -459,6 +469,9 @@ class DyMVSNeRF_G(nn.Module):
         c2ws = x['c2ws']
         intrinsics = x['intrinsics']
         depths = x['depths_h']
+        frame_t = x['time'].item()
+        num_frames = x['total_frames'].item()
+        ref_frame_idx = frame_t/num_frames * 2. - 1.0 # normalised frame index for reference image
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
@@ -478,6 +491,8 @@ class DyMVSNeRF_G(nn.Module):
                        patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
                        step=step, variable_patches=(self.args.gan_type=='graf'))
 
+        self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
+
         # Render colours along rays from volume feature and images
         rgb, feats, weights, depth_pred, alpha = rendering(self.args, x,
                                                            rays_pts, rays_NDC,
@@ -493,7 +508,11 @@ class DyMVSNeRF_G(nn.Module):
                                                            embedding_dir=self.embedding_dir,
                                                            time_codes=time_codes,
                                                            white_bkgd=self.args.white_bkgd,
-                                                           scene_flow=True)
+                                                           scene_flow=True,
+                                                           chain_bwd=self.chain_bwd,
+                                                           chain_5frames=self.chain_5frames,
+                                                           ref_frame_idx=ref_frame_idx,
+                                                           num_frames=num_frames)
 
         depth_pred = depth_pred.unsqueeze(-1)
         logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape)+", " \
