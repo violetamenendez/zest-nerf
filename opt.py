@@ -26,7 +26,6 @@ def config_parser(cmd=None):
                         help='input data directory')
     parser.add_argument("--configdir", type=str, default='./configs/',
                         help='dataset config files with splits')
-    parser.add_argument('--with_rgb_loss', action='store_true')
     parser.add_argument('--imgScale_train', type=float, default=1.0)
     parser.add_argument('--imgScale_test', type=float, default=1.0)
     parser.add_argument('--img_downscale', type=float, default=1.0)
@@ -38,15 +37,12 @@ def config_parser(cmd=None):
     parser.add_argument("--num_epochs", type=int, default=8)
     parser.add_argument("--pts_dim", type=int, default=3)
     parser.add_argument("--dir_dim", type=int, default=3)
-    parser.add_argument("--alpha_feat_dim", type=int, default=8)
     parser.add_argument("--num_input", type=int, default=3)
     parser.add_argument('--net_type', type=str, default='v0')
     parser.add_argument('--dataset_name', type=str, default='blender',
                         choices=['dtu', 'neural3Dvideo', 'llff'])
     parser.add_argument('--use_color_volume', default=False, action="store_true",
                         help='project colors into a volume without indexing from image everytime')
-    parser.add_argument('--use_density_volume', default=False, action="store_true",
-                        help='point sampling with density')
 
     # training options
     parser.add_argument("--netdepth", type=int, default=6,
@@ -80,15 +76,6 @@ def config_parser(cmd=None):
                         help='learning rate')
     parser.add_argument("--lrate_disc", type=float, default=1e-4,
                         help='learning rate for the discriminator')
-    parser.add_argument('--decay_step', nargs='+', type=int, default=[5000, 8000, 9000],
-                        help='scheduler decay step')
-    parser.add_argument('--decay_gamma', type=float, default=0.5,
-                        help='learning rate decay amount')
-    parser.add_argument('--lr_scheduler', type=str, default='steplr',
-                        help='scheduler type',
-                        choices=['steplr', 'cosine', 'poly'])
-    parser.add_argument('--warmup_epochs', type=int, default=0,
-                        help='Gradually warm-up(increasing) learning rate in optimizer')
     parser.add_argument('--lambda_rec', type=int, default=200,
                         help='Reconstruction loss weight coefficient')
     parser.add_argument('--lambda_depth_reg', type=float, default=0.1,
@@ -143,10 +130,6 @@ def config_parser(cmd=None):
                         help='number of additional fine samples per ray')
     parser.add_argument("--scale_anneal", type=float, default=0.0025,
                         help='patch scale reduction over training')
-    parser.add_argument('--use_disp', default=False, action="store_true",
-                        help='use disparity depth sampling')
-    parser.add_argument("--perturb", type=float, default=1.,
-                        help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
     parser.add_argument("--pts_embedder", action='store_true',
