@@ -686,7 +686,7 @@ def main():
         pl.seed_everything(hparams.seed_everything)
 
     hparams.save_dir = Path(hparams.save_dir)
-    system = MVSNeRFSystem(hparams, pts_embedder=hparams.pts_embedder)
+    system = MVSNeRFSystem(hparams, pts_embedder=hparams.pts_embedder, dir_embedder=hparams.dir_embedder)
 
     save_dir_ckpts = hparams.save_dir / hparams.expname / 'ckpts'
     save_dir_ckpts.mkdir(parents=True, exist_ok=True)

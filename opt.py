@@ -134,6 +134,8 @@ def config_parser(cmd=None):
                         help='use full 5D input instead of 3D')
     parser.add_argument("--pts_embedder", action='store_true',
                         help='enable positional encoding  for points')
+    parser.add_argument("--dir_embedder", action='store_true',
+                        help='enable positional encoding  for directions')
     parser.add_argument("--multires", type=int, default=10,
                         help='log2 of max freq for positional encoding (3D location)')
     parser.add_argument("--multires_views", type=int, default=4,
