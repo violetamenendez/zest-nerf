@@ -64,6 +64,8 @@ def config_parser(cmd=None):
                         help='select 32 bits precision or mixed precision')
     parser.add_argument("--acc_grad", type=int, default=1,
                         help='number of batches to accumulate gradients over')
+    parser.add_argument('--use_mvs', action='store_true',
+                        help='use MVS encoding volume to generalise scenes')
     parser.add_argument('--train_video', action='store_true',
                         help='training of a dynamic scene by using time codes. See: https://neural-3d-video.github.io/')
     parser.add_argument('--key_frames', action='store_true',

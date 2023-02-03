@@ -114,26 +114,28 @@ class MVSNeRFSystem(LightningModule):
             self.nerf_dynamic = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
                  input_ch_pts=self.input_ch_dy, output_ch=self.output_ch, skips=skips,
                  input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
-                 sceneflow=True, static=False)
+                 sceneflow=True, static=False, use_mvs=use_mvs)
             self.models += [self.nerf_dynamic]
 
             self.nerf_static = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
                  input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
                  input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
-                 sceneflow=True, static=True)
+                 sceneflow=True, static=True, use_mvs=use_mvs)
             self.models += [self.nerf_static]
         else:
             # Normal NeRF mode
             self.nerf_coarse = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
                     input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
-                    input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type)
+                    input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
+                    use_mvs=use_mvs)
             self.models += [self.nerf_coarse]
 
         # Default is no fine network.
         if self.hparams.N_importance > 0:
             self.nerf_fine = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
                  input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
-                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim)
+                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim,
+                 use_mvs=use_mvs)
             self.models += [self.nerf_fine]
 
         # Encoding volume (creates cost volume and then enc vol)
@@ -686,7 +688,7 @@ def main():
         pl.seed_everything(hparams.seed_everything)
 
     hparams.save_dir = Path(hparams.save_dir)
-    system = MVSNeRFSystem(hparams, pts_embedder=hparams.pts_embedder, dir_embedder=hparams.dir_embedder)
+    system = MVSNeRFSystem(hparams, pts_embedder=hparams.pts_embedder, use_mvs=hparams.use_mvs, dir_embedder=hparams.dir_embedder)
 
     save_dir_ckpts = hparams.save_dir / hparams.expname / 'ckpts'
     save_dir_ckpts.mkdir(parents=True, exist_ok=True)

@@ -73,7 +73,7 @@ def weights_init(m):
 class Renderer(nn.Module):
     def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4,
                  input_ch_feat=8, skips=[4], use_viewdirs=False,
-                 sceneflow=False, static=True):
+                 sceneflow=False, static=True, use_mvs=False):
         """
         NeRF
         """
@@ -87,7 +87,7 @@ class Renderer(nn.Module):
         self.in_ch_feat = input_ch_feat
         self.predict_sceneflow = sceneflow
         self.static = static
-        self.in_feats = static # for now only use input features for static NeRF, in future we can change this
+        self.use_mvs = use_mvs
 
         # Points encoding layers
         self.pts_linears = nn.ModuleList()
@@ -150,7 +150,7 @@ class Renderer(nn.Module):
         """
         logging.info("STEP FORWARD")
 
-        if self.in_feats:
+        if self.use_mvs:
             input_pts, input_feats, input_views = torch.split(x, [self.in_ch_pts,
                                                                   self.in_ch_feat,
                                                                   self.in_ch_views],
@@ -167,12 +167,12 @@ class Renderer(nn.Module):
 
         # Encode inputs
         pts = input_pts
-        if self.in_feats:
+        if self.use_mvs:
             bias = self.pts_bias(input_feats)
 
         for i, layer in enumerate(self.pts_linears):
             pts = layer(pts)
-            if self.in_feats:
+            if self.use_mvs:
                 pts *= bias
             pts = F.relu(pts)
             if i in self.skips:
@@ -317,7 +317,7 @@ class Renderer_linear(nn.Module):
 
 class MVSNeRF(nn.Module):
     def __init__(self, D=8, W=256, input_ch_pts=3, output_ch=4, input_ch_views=3,
-                 input_ch_feat=8, skips=[4], net_type='v2', sceneflow=False, static=True):
+                 input_ch_feat=8, skips=[4], net_type='v2', sceneflow=False, static=True, use_mvs=False):
         """
         Wrapper around NeRF to select correct network type (either linear or not)
         """
@@ -334,7 +334,7 @@ class MVSNeRF(nn.Module):
             self.nerf = Renderer(D=D, W=W,input_ch_feat=input_ch_feat,
                         input_ch=input_ch_pts, output_ch=output_ch, skips=skips,
                         input_ch_views=input_ch_views, use_viewdirs=True,
-                        sceneflow=sceneflow, static=static)
+                        sceneflow=sceneflow, static=static, use_mvs=use_mvs)
         elif net_type == 'v2':
             # NeRF fine
             # L_n = ReLU(FC(L_{n-1}) + neural_features)
@@ -391,12 +391,14 @@ class MVSNeRF_G(nn.Module):
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
-        volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
-                                                                   proj_mats[:, :3],
-                                                                   near_fars[0,0],
-                                                                   pad=self.args.pad,
-                                                                   vis_test=self.args.vis_cnn,
-                                                                   test_dir=Path(self.args.save_test))
+        volume_feature = None
+        if self.encoding_net is not None:
+            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
+                                                                       proj_mats[:, :3],
+                                                                       near_fars[0,0],
+                                                                       pad=self.args.pad,
+                                                                       vis_test=self.args.vis_cnn,
+                                                                       test_dir=Path(self.args.save_test))
         imgs = self.unpreprocess(imgs) # unnormalise for visualisation
 
         # Ray generation from images and camera positions
@@ -475,12 +477,14 @@ class DyMVSNeRF_G(nn.Module):
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
-        volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
-                                                                   proj_mats[:, :3],
-                                                                   near_fars[0,0],
-                                                                   pad=self.args.pad,
-                                                                   vis_test=self.args.vis_cnn,
-                                                                   test_dir=Path(self.args.save_test))
+        volume_feature = None
+        if self.encoding_net is not None:
+            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
+                                                                       proj_mats[:, :3],
+                                                                       near_fars[0,0],
+                                                                       pad=self.args.pad,
+                                                                       vis_test=self.args.vis_cnn,
+                                                                       test_dir=Path(self.args.save_test))
         imgs = self.unpreprocess(imgs) # unnormalise for visualisation
 
         # Ray generation from images and camera positions
