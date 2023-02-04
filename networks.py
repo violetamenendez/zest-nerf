@@ -409,18 +409,24 @@ class MVSNeRF_G(nn.Module):
                        step=step, variable_patches=(self.args.gan_type=='graf'))
 
         # Render colours along rays from volume feature and images
-        rgb, feats, weights, depth_pred, alpha = rendering(self.args, x,
-                                                           rays_pts, rays_NDC,
-                                                           depth_candidates,
-                                                           rays_dir,
-                                                           volume_feature,
-                                                           imgs[:, :-1],
-                                                           img_feat=None,
-                                                           network_fn=self.nerf,
-                                                           embedding_pts=self.embedding_pts,
-                                                           embedding_dir=self.embedding_dir,
-                                                           time_codes=time_codes,
-                                                           white_bkgd=self.args.white_bkgd)
+        ret = rendering(self.args, x,
+                        rays_pts, rays_NDC,
+                        depth_candidates,
+                        rays_dir,
+                        volume_feature,
+                        imgs[:, :-1],
+                        img_feat=None,
+                        network_fn=self.nerf,
+                        embedding_pts=self.embedding_pts,
+                        embedding_dir=self.embedding_dir,
+                        time_codes=time_codes,
+                        white_bkgd=self.args.white_bkgd)
+
+        rgb = ret['rgb_map']
+        feats = ret['input_feat']
+        weights = ret['weights']
+        depth_pred = ret['depth_map']
+        alpha = ret['alpha']
 
         depth_pred = depth_pred.unsqueeze(-1)
         logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape) \
@@ -498,25 +504,31 @@ class DyMVSNeRF_G(nn.Module):
         self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
 
         # Render colours along rays from volume feature and images
-        rgb, feats, weights, depth_pred, alpha = rendering(self.args, x,
-                                                           rays_pts, rays_NDC,
-                                                           depth_candidates,
-                                                           rays_dir,
-                                                           volume_feature,
-                                                           imgs[:, :-1],
-                                                           img_feat=None,
-                                                           network_fn=self.nerf_static,
-                                                           network_fn_dy=self.nerf_dynamic,
-                                                           embedding_pts=self.embedding_pts,
-                                                           embedding_xyzt=self.embedding_xyzt,
-                                                           embedding_dir=self.embedding_dir,
-                                                           time_codes=time_codes,
-                                                           white_bkgd=self.args.white_bkgd,
-                                                           scene_flow=True,
-                                                           chain_bwd=self.chain_bwd,
-                                                           chain_5frames=self.chain_5frames,
-                                                           ref_frame_idx=ref_frame_idx,
-                                                           num_frames=num_frames)
+        ret = rendering(self.args, x,
+                        rays_pts, rays_NDC,
+                        depth_candidates,
+                        rays_dir,
+                        volume_feature,
+                        imgs[:, :-1],
+                        img_feat=None,
+                        network_fn=self.nerf_static,
+                        network_fn_dy=self.nerf_dynamic,
+                        embedding_pts=self.embedding_pts,
+                        embedding_xyzt=self.embedding_xyzt,
+                        embedding_dir=self.embedding_dir,
+                        time_codes=time_codes,
+                        white_bkgd=self.args.white_bkgd,
+                        scene_flow=True,
+                        chain_bwd=self.chain_bwd,
+                        chain_5frames=self.chain_5frames,
+                        ref_frame_idx=ref_frame_idx,
+                        num_frames=num_frames)
+
+        rgb = ret['rgb_map']
+        feats = ret['input_feat']
+        weights = ret['weights']
+        depth_pred = ret['depth_map']
+        alpha = ret['alpha']
 
         depth_pred = depth_pred.unsqueeze(-1)
         logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape)+", " \
