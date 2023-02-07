@@ -303,33 +303,31 @@ class MVSNeRFSystem(LightningModule):
 
         time_code = self.time_codes[data_mvs['keyframe_id']].to(self.device) if self.time_codes is not None else None
 
-        rgb, target_s, depth_pred, depth, weights, t_vals = self.generator(data_mvs,
-                                                                           self.global_step,
-                                                                           time_codes=time_code)
-
-        return {'rgb': rgb,
-                'target_s': target_s,
-                'depth_pred': depth_pred,
-                'depth_gt': depth,
-                'weights': weights,
-                't_vals': t_vals}
+        return self.generator(data_mvs, self.global_step, time_codes=time_code)
 
     def training_step(self, batch, batch_idx, optimizer_idx=None):
         logging.info("TRAINING STEP")
         results = self(batch)
 
-        # Depth total variation regularisation - not on paper
+        rgb_pred = results['rgb_map']
+        rgb_gt = results['target_s']
+        depth_pred = results['depth_map'].unsqueeze(-1)
+        depth_gt = results['depth_gt']
+        weights = results['weights']
+        t_vals = results['t_vals']
+
+        # Depth TV regularisation
         tv_depth_loss = 0
         if self.hparams.with_depth_loss_reg:
-            depth_patch = results['depth_pred'].reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 1).squeeze(-1)
+            depth_patch = depth_pred.reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 1).squeeze(-1)
             tv_depth_loss = self.hparams.lambda_depth_reg * self.tv_loss(depth_patch)
             self.log('tv_depth_loss', tv_depth_loss)
 
         # Depth smoothness - equation 12
         depth_smooth_loss = 0
         if self.hparams.with_depth_smoothness:
-            depth_patch = results['depth_pred'].reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 1)
-            img_patch = results['rgb'].reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3)
+            depth_patch = depth_pred.reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 1)
+            img_patch = rgb_pred.reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3)
             depth_smooth_loss = self.hparams.lambda_depth_smooth * self.depth_smooth(depth_patch, img_patch)
             self.log('depth_smooth_loss', depth_smooth_loss)
 
@@ -337,14 +335,14 @@ class MVSNeRFSystem(LightningModule):
         # Regularisation for interval-based models
         distortion_loss = 0
         if self.hparams.with_distortion_loss:
-            distortion_loss = self.hparams.lambda_distortion * self.dist_loss(results['weights'], results['t_vals'])
+            distortion_loss = self.hparams.lambda_distortion * self.dist_loss(weights, t_vals)
             self.log('distortion_loss', distortion_loss)
 
         # Perceptual loss - LPIPS
         perceptual_loss = 0
         if self.hparams.with_perceptual_loss:
-            pred_patch = results['rgb'].reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3).permute(0,3,1,2).float() * 2 - 1.0
-            gt_patch = results['target_s'].reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3).permute(0,3,1,2).float() * 2 - 1.0
+            pred_patch = rgb_pred.reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3).permute(0,3,1,2).float() * 2 - 1.0
+            gt_patch = rgb_gt.reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3).permute(0,3,1,2).float() * 2 - 1.0
             perceptual_loss = self.hparams.lambda_perc * self.perc_loss(pred_patch, gt_patch)
             self.log('perceptual_loss', perceptual_loss)
 
@@ -354,7 +352,7 @@ class MVSNeRFSystem(LightningModule):
             # Train Generator
             if optimizer_idx == 0:
                 # Generator loss
-                G_pred_fake = self.discriminator(results['rgb'])
+                G_pred_fake = self.discriminator(rgb_pred)
                 if self.hparams.getIntermFeat:
                     D_interfeat_fake = G_pred_fake[:-1]
                     G_pred_fake = G_pred_fake[-1]
@@ -367,7 +365,7 @@ class MVSNeRFSystem(LightningModule):
                 # Intermediate feature matching - default off
                 G_feat_loss = 0
                 if self.hparams.getIntermFeat:
-                    real_img = results['target_s'].detach()
+                    real_img = rgb_gt.detach()
                     D_pred_real = self.discriminator(real_img)
                     D_interfeat_real = D_pred_real[:-1]
 
@@ -380,7 +378,7 @@ class MVSNeRFSystem(LightningModule):
                 # Adversarial depth supervision - default off
                 G_depth_fake_loss = 0
                 if self.with_depth_loss:
-                    G_depth_pred_fake = self.depth_disc(results['depth_pred'])
+                    G_depth_pred_fake = self.depth_disc(depth_pred)
                     # depth_pred.reshape(-1, self.args.patch_size, self.args.patch_size)
                     G_depth_fake_loss = self.adversarial_loss(G_depth_pred_fake, torch.ones_like(G_depth_pred_fake))
                     self.log('G_depth_fake_loss', G_depth_fake_loss)
@@ -388,11 +386,11 @@ class MVSNeRFSystem(LightningModule):
                 # Depth reconstruction - default off
                 rec_depth_loss = 0
                 if self.hparams.with_depth_loss_rec:
-                    rec_depth_loss = self.loss(results['depth_pred'], results['depth_gt'])
+                    rec_depth_loss = self.loss(depth_pred, depth_gt)
                     self.log('rec_depth_loss', rec_depth_loss)
 
-                # Reconstruction loss - equation 9
-                G_rec_loss = self.hparams.lambda_rec * self.loss(results['rgb'], results['target_s'])
+                # Model quality loss
+                G_rec_loss = self.hparams.lambda_rec * self.loss(rgb_pred, rgb_gt)
                 self.log('G_rec_loss', G_rec_loss)
 
                 total_loss = G_fake_loss \
@@ -408,7 +406,7 @@ class MVSNeRFSystem(LightningModule):
             # Train Discriminator
             if optimizer_idx == 1:
                 # Fake detection and loss
-                fake_img = results['rgb'].detach()
+                fake_img = rgb_pred.detach()
                 D_pred_fake = self.discriminator(fake_img)
                 if self.hparams.getIntermFeat:
                     D_pred_fake = D_pred_fake[-1]
@@ -418,7 +416,7 @@ class MVSNeRFSystem(LightningModule):
                 self.log('D_fake_loss', D_fake_loss)
 
                 # Real detection and loss
-                real_img = results['target_s'].detach()
+                real_img = rgb_gt.detach()
                 D_pred_real = self.discriminator(real_img)
                 if self.hparams.getIntermFeat:
                     D_pred_real = D_pred_real[-1]
@@ -432,7 +430,7 @@ class MVSNeRFSystem(LightningModule):
             # Train Depth Discriminator
             if optimizer_idx == 2:
                 # Fake depth supervision
-                D_depth_pred_fake = self.depth_disc(results['depth_pred'].detach())
+                D_depth_pred_fake = self.depth_disc(depth_pred.detach())
                 # depth_pred.reshape(-1, self.args.patch_size, self.args.patch_size)
                 D_depth_fake_loss = self.adversarial_loss(D_depth_pred_fake, torch.zeros_like(D_depth_pred_fake))
 
@@ -440,7 +438,7 @@ class MVSNeRFSystem(LightningModule):
                 self.log('D_depth_fake_loss', D_depth_fake_loss)
 
                 # Real depth supervision
-                D_depth_pred_real = self.depth_disc(results['depth_gt'].detach())
+                D_depth_pred_real = self.depth_disc(depth_gt.detach())
                 # depth_pred.reshape(-1, self.args.patch_size, self.args.patch_size)
                 D_depth_real_loss = self.adversarial_loss(D_depth_pred_real, torch.ones_like(D_depth_pred_real))
 
@@ -452,7 +450,7 @@ class MVSNeRFSystem(LightningModule):
                 self.log('D_depth_loss', total_loss)
         else:
             # Normal training
-            total_loss = self.loss(results['rgb'], results['target_s']) \
+            total_loss = self.loss(rgb_pred, rgb_gt) \
                        + self.hparams.lambda_depth_reg * tv_depth_loss \
                        + self.hparams.lambda_depth_smooth * depth_smooth_loss \
                        + self.hparams.lambda_distortion * distortion_loss
@@ -461,7 +459,7 @@ class MVSNeRFSystem(LightningModule):
 
         # Metrics
         with torch.no_grad():
-            psnr_ = psnr(results['rgb'], results['target_s'], 1)
+            psnr_ = psnr(rgb_pred, rgb_gt, 1)
             self.log('train_PSNR', psnr_, prog_bar=True)
 
 

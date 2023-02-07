@@ -524,17 +524,11 @@ class DyMVSNeRF_G(nn.Module):
                         ref_frame_idx=ref_frame_idx,
                         num_frames=num_frames)
 
-        rgb = ret['rgb_map']
-        feats = ret['input_feat']
-        weights = ret['weights']
-        depth_pred = ret['depth_map']
-        alpha = ret['alpha']
+        ret['target_s'] = target_s
+        ret['depth_gt'] = rays_depth_gt
+        ret['t_vals'] = t_vals
 
-        depth_pred = depth_pred.unsqueeze(-1)
-        logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape)+", " \
-            +str(depth_pred.shape)+","+str(rays_depth_gt.shape))
-
-        return rgb, target_s, depth_pred, rays_depth_gt, weights, t_vals
+        return ret
 
 class BasicDiscriminator(nn.Module):
     def __init__(self, img_shape, gan_type = None):
