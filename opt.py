@@ -40,7 +40,7 @@ def config_parser(cmd=None):
     parser.add_argument("--num_input", type=int, default=3)
     parser.add_argument('--net_type', type=str, default='v0')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['dtu', 'neural3Dvideo', 'llff'])
+                        choices=['dtu', 'neural3Dvideo', 'llff', 'nsff'])
     parser.add_argument('--use_color_volume', default=False, action="store_true",
                         help='project colors into a volume without indexing from image everytime')
 
