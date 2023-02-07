@@ -365,6 +365,11 @@ class MVSNeRFSystem(LightningModule):
             rgb_map_pp_dy = results['rgb_map_pp_dy'] if self.hparams.with_chain_loss else None # Dynamic-only RGB map at time (frame_t - 2) or (frame_t + 2)
             prob_map_post = results['prob_map_post'] # Confidence of the RGB map at time (frame_t + 1)
             prob_map_prev = results['prob_map_prev'] # Confidence of the RGB map at time (frame_t - 1)
+            # Scene flow
+            raw_sf_ref2post = results['raw_sf_ref2post'] # scene flow: frame_t -> (frame_t + 1)
+            raw_sf_post2ref = results['raw_sf_post2ref'] # scene flow: (frame_t + 1) -> frame_t
+            raw_sf_ref2prev = results['raw_sf_ref2prev'] # scene flow: frame_t -> (frame_t - 1)
+            raw_sf_prev2ref = results['raw_sf_prev2ref'] # scene flow: (frame_t - 1) -> frame_t
             # Alpha-compositing weights
             weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
             weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
@@ -409,7 +414,24 @@ class MVSNeRFSystem(LightningModule):
             ########################
 
 
-            sceneflow_loss = pho_loss + combined_loss
+            #######################################
+            # Cycle loss - flow cycle consistency #
+            #######################################
+            # The predicted forward scene flow at time t
+            # is consistent with the backward scene flow at time t+1
+            weight_post = 1. - results['raw_prob_ref2post'] # Disocclusion weights
+            weight_prev = 1. - results['raw_prob_ref2prev'] # Disocclusion weights
+            sf_cycle_loss = mse_masked(raw_sf_ref2post,
+                                      -raw_sf_post2ref,
+                                       weight_post.unsqueeze(-1))
+            sf_cycle_loss += mse_masked(raw_sf_ref2prev,
+                                       -raw_sf_prev2ref,
+                                        weight_prev.unsqueeze(-1))
+            self.log('sf_cycle_loss', self.hparams.lambda_cyc * sf_cycle_loss)
+            #######################################
+
+            sceneflow_loss = pho_loss + combined_loss \
+                           + self.hparams.lambda_cyc * sf_cycle_loss
 
         if self.hparams.gan_type != None:
             # Adversarial training
