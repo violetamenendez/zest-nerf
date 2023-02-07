@@ -82,3 +82,17 @@ def distortion_loss(ray_weights, t_vals):
 	loss = torch.sum(weighted_dist + individual_interval_size)
 
 	return loss
+
+def mse_masked(pred, gt, mask):
+	"""Returns the Mean Squared Error of a predicted image in only the masked region
+
+	Inputs:
+	- pred: [N,N_rays, 3]
+	- gt: [N,N_rays, 3]
+	- mask: [N,N_rays, 1]
+	"""
+	d = [1 for t in range(pred.dim() - 1)] # Num of dimensions to keep as they are
+	mask_rep = mask.repeat(*d, pred.size(-1)) # Repeat along the last dimension
+	num_pix = torch.sum(mask_rep) + 1e-8
+	mse = torch.sum(((pred - gt) ** 2) * mask_rep) / num_pix
+	return mse

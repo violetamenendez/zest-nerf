@@ -43,7 +43,7 @@ from utils import build_rays, visualize_depth
 from renderer import rendering
 from opt import config_parser
 from data import dataset_dict
-from losses import total_variation_loss, get_disparity_smoothness, distortion_loss
+from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, mse_masked
 
 logging.captureWarnings(True)
 coloredlogs.install(
@@ -66,6 +66,9 @@ class MVSNeRFSystem(LightningModule):
         # From MVSSystem
         self.hparams.feat_dim = 8+self.hparams.num_input*4
         self.idx = 0 # validation step counter
+
+        # Scene Flow config
+        self.decay_iteration = min(self.hparams.decay_iteration, 250) # data driven priors
 
         # Losses
         self.loss = nn.MSELoss(reduction='mean')
@@ -316,6 +319,11 @@ class MVSNeRFSystem(LightningModule):
         weights = results['weights']
         t_vals = results['t_vals']
 
+        # Rendering loss
+        render_loss = 0
+        if not self.hparams.train_sceneflow:
+            render_loss = self.loss(rgb_pred, rgb_gt)
+
         # Depth TV regularisation
         tv_depth_loss = 0
         if self.hparams.with_depth_loss_reg:
@@ -345,6 +353,56 @@ class MVSNeRFSystem(LightningModule):
             gt_patch = rgb_gt.reshape(-1, self.hparams.patch_size, self.hparams.patch_size, 3).permute(0,3,1,2).float() * 2 - 1.0
             perceptual_loss = self.hparams.lambda_perc * self.perc_loss(pred_patch, gt_patch)
             self.log('perceptual_loss', perceptual_loss)
+
+        # Scene Flow losses
+        sceneflow_loss = 0
+        if self.hparams.train_sceneflow:
+            # RGB maps
+            rgb_map_ref = results['rgb_map_ref'] # Blended RGB map (dynamic + static)
+            rgb_map_ref_dy = results['rgb_map_ref_dy'] # Dynamic-only RGB map at current time frame_t
+            rgb_map_post_dy = results['rgb_map_post_dy'] # Dynamic-only RGB map at time (frame_t + 1)
+            rgb_map_prev_dy = results['rgb_map_prev_dy'] # Dynamic-only RGB map at time (frame_t - 1)
+            rgb_map_pp_dy = results['rgb_map_pp_dy'] if self.hparams.with_chain_loss else None # Dynamic-only RGB map at time (frame_t - 2) or (frame_t + 2)
+            prob_map_post = results['prob_map_post'] # Confidence of the RGB map at time (frame_t + 1)
+            prob_map_prev = results['prob_map_prev'] # Confidence of the RGB map at time (frame_t - 1)
+            # Alpha-compositing weights
+            weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
+            weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
+
+            ##########################################
+            # Temporal photometric consistency - l_pho
+            # Dynamic-only rendering loss
+            if self.global_step <= self.decay_iteration * 1000:
+                # Initialisation
+                pho_loss = self.loss(rgb_map_ref_dy, rgb_gt)
+                pho_loss += mse_masked(rgb_map_post_dy,
+                                       rgb_gt,
+                                       prob_map_post.unsqueeze(-1))
+                pho_loss += mse_masked(rgb_map_prev_dy,
+                                       rgb_gt,
+                                       prob_map_prev.unsqueeze(-1))
+            else:
+                weights_map_dd = weights_map_dd.unsqueeze(-1).detach()
+                pho_loss = mse_masked(rgb_map_ref_dy,
+                                      rgb_gt,
+                                      weights_map_dd)
+                pho_loss += mse_masked(rgb_map_post_dy,
+                                       rgb_gt,
+                                       prob_map_post.unsqueeze(-1) * weights_map_dd)
+                pho_loss += mse_masked(rgb_map_prev_dy,
+                                       rgb_gt,
+                                       prob_map_prev.unsqueeze(-1) * weights_map_dd)
+            if self.hparams.with_chain_loss:
+                pho_loss += mse_masked(rgb_map_pp_dy,
+                                       rgb_gt,
+                                       weights_map_dd.unsqueeze(-1))
+            self.log('pho_loss', pho_loss)
+            ##########################################
+
+            # Blended image (dy + static) rendering loss
+            pho_loss += self.loss(rgb_map_ref, rgb_gt)
+
+            sceneflow_loss = pho_loss
 
         if self.hparams.gan_type != None:
             # Adversarial training
@@ -450,10 +508,11 @@ class MVSNeRFSystem(LightningModule):
                 self.log('D_depth_loss', total_loss)
         else:
             # Normal training
-            total_loss = self.loss(rgb_pred, rgb_gt) \
+            total_loss = render_loss \
                        + self.hparams.lambda_depth_reg * tv_depth_loss \
                        + self.hparams.lambda_depth_smooth * depth_smooth_loss \
-                       + self.hparams.lambda_distortion * distortion_loss
+                       + self.hparams.lambda_distortion * distortion_loss \
+                       + sceneflow_loss
 
         self.log('train_loss', total_loss, prog_bar=True)
 
