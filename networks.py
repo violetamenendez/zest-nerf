@@ -22,7 +22,7 @@ import torchvision
 
 from inplace_abn import InPlaceABN
 
-from utils import homo_warp, build_rays
+from utils import homo_warp, build_rays, build_rays_dy
 from renderer import rendering
 
 ##############################  NeRF Net models  ##############################
@@ -495,11 +495,12 @@ class DyMVSNeRF_G(nn.Module):
 
         # Ray generation from images and camera positions
         # NOTE: I think this is the same for NSFF (or equivalent)
-        rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals = \
-            build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
-                       N_rays=self.N_rays, pad=self.args.pad,
-                       patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
-                       step=step, variable_patches=(self.args.gan_type=='graf'))
+        rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals, \
+        rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt = \
+            build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
+                          N_rays=self.N_rays, pad=self.args.pad,
+                          patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
+                          step=step, variable_patches=(self.args.gan_type=='graf'))
 
         self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
 

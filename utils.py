@@ -277,9 +277,10 @@ def get_ndc_coordinate(w2c_ref, intrinsic_ref, point_samples, inv_scale, near=2,
     logging.info("outputs "+str(point_samples_pixel.shape))
     return point_samples_pixel
 
-def build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_rays=1024,
-               stratified=True, pad=0, chunk=-1, idx=-1, ref_idx=0, val=False,
-               isRandom=True, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False):
+def build_rays_base(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_rays=1024,
+                    stratified=True, pad=0, chunk=-1, idx=-1, ref_idx=0, val=False,
+                    isRandom=True, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False,
+                    scene_flow=False, flow_fwd=None, flow_bwd=None, mask_fwd=None, mask_bwd=None):
     '''
 
     Args:
@@ -328,11 +329,19 @@ def build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_ray
     rays_o = rays_o.reshape(1, 1, 3)
     rays_o = rays_o.expand(-1, ray_samples, -1)
 
-    pixel_coordinates_int = pixel_coordinates.long()
-    color = imgs[:, -1, :, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]] # [3 N_rays] # colour of the image at the selected pixel (N_rays)
-    color = color.permute(0,2,1)
+    pixel_coordinates_int = pixel_coordinates.long() # [N, 2, 1024]
+    color = imgs[:, -1, :, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]] # [N, 3, N_rays] # colour of the image along the pixel coordinates (N_rays)
+    color = color.permute(0,2,1) # [N, N_rays, 3]
+    rays_depth_gt = depths[:, -1, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]] # [N, 1024]
 
-    rays_depth_gt = depths[:, -1, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]]
+
+    rays_flow_fwd_gt, rays_flow_bwd_gt = None, None
+    rays_mask_fwd_gt, rays_mask_bwd_gt = None, None
+    if scene_flow:
+        rays_flow_fwd_gt = flow_fwd[:, -1, :, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]].permute(0,2,1) # [N, 1024, 2]
+        rays_flow_bwd_gt = flow_bwd[:, -1, :, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]].permute(0,2,1) # [N, 1024, 2]
+        rays_mask_fwd_gt = mask_fwd[:, -1, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]] # [N, 1024]
+        rays_mask_bwd_gt = mask_bwd[:, -1, pixel_coordinates_int[0,0], pixel_coordinates_int[0,1]] # [N, 1024]
 
     # travel along the rays
     near_tgt, far_tgt = near_fars[:, -1, 0], near_fars[:, -1, 1]
@@ -366,7 +375,42 @@ def build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_ray
         +str(color.shape)+","+str(points_ndc.shape)+","+str(depth_candidate.shape)+"," \
         +str(rays_depth_gt.shape))
 
+    return point_samples, rays_d, color, points_ndc, depth_candidate, rays_depth_gt, t_vals, \
+        rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt
+
+def build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_rays=1024,
+               stratified=True, pad=0, chunk=-1, idx=-1, ref_idx=0, val=False,
+               isRandom=True, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False):
+
+    point_samples, rays_d, color, points_ndc, depth_candidate, rays_depth_gt, t_vals, \
+        _, _, _, _ = build_rays_base(imgs, depths, w2cs, c2ws, intrinsics, near_fars,
+                                     N_samples, N_rays=N_rays, stratified=stratified, pad=pad,
+                                     chunk=chunk, idx=idx, ref_idx=ref_idx, val=val, isRandom=isRandom,
+                                     patch_size=patch_size, scale_anneal=scale_anneal, step=step,
+                                     variable_patches=variable_patches, scene_flow=False)
+
     return point_samples, rays_d, color, points_ndc, depth_candidate, rays_depth_gt, t_vals
+
+def build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_rays=1024,
+                  stratified=True, pad=0, chunk=-1, idx=-1, ref_idx=0, val=False,
+                  isRandom=True, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False,
+                  scene_flow=False, flow_fwd=None, flow_bwd=None, mask_fwd=None, mask_bwd=None):
+
+    point_samples, rays_d, color, points_ndc, \
+        depth_candidate, rays_depth_gt, t_vals, \
+        rays_flow_fwd_gt, rays_flow_bwd_gt, \
+        rays_mask_fwd_gt, rays_mask_bwd_gt = build_rays_base(imgs, depths, w2cs, c2ws, intrinsics, near_fars,
+                                                             N_samples, N_rays=N_rays, stratified=stratified,
+                                                             pad=pad, chunk=chunk, idx=idx, ref_idx=ref_idx,
+                                                             val=val, isRandom=isRandom, patch_size=patch_size,
+                                                             scale_anneal=scale_anneal, step=step,
+                                                             variable_patches=variable_patches,
+                                                             scene_flow=scene_flow,
+                                                             flow_fwd=flow_fwd, flow_bwd=flow_bwd,
+                                                             mask_fwd=mask_fwd, mask_bwd=mask_bwd)
+
+    return point_samples, rays_d, color, points_ndc, depth_candidate, rays_depth_gt, t_vals, \
+        rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt
 
 def index_point_feature(volume_feature, ray_coordinate_ref):
     ''''
