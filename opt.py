@@ -92,6 +92,8 @@ def config_parser(cmd=None):
                         help='Depth smoothness loss coefficient')
     parser.add_argument("--lambda_cyc", type=float, default=0.1,
                         help='Scene flow cycle consistency loss coefficient')
+    parser.add_argument("--lambda_sf_reg", type=float, default=0.1,
+                        help='Scene flow regularization loss coefficient')
     parser.add_argument('--time_code_dim', type=float, default=1024,
                         help='Set dimension of dynamic latent codes')
     parser.add_argument("--decay_iteration", type=int, default=50,

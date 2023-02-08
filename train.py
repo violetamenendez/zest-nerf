@@ -430,8 +430,23 @@ class MVSNeRFSystem(LightningModule):
             self.log('sf_cycle_loss', self.hparams.lambda_cyc * sf_cycle_loss)
             #######################################
 
+            ################################
+            ### SCENEFLOW REGULARISATION ###
+            ################################
+
+            ##############################
+            # Scene flow minimal - l_min #
+            ##############################
+            # Encourage scene flow to be minimal in most of 3D space
+            render_sf_ref2prev = torch.sum(weights_ref_dy.unsqueeze(-1) * raw_sf_ref2prev, -1)
+            render_sf_ref2post = torch.sum(weights_ref_dy.unsqueeze(-1) * raw_sf_ref2post, -1)
+            sf_min_loss = torch.mean(torch.abs(render_sf_ref2prev)) + torch.mean(torch.abs(render_sf_ref2post))
+            self.log('sf_min_loss', self.hparams.lambda_sf_reg * sf_min_loss)
+            ###############################
+
             sceneflow_loss = pho_loss + combined_loss \
-                           + self.hparams.lambda_cyc * sf_cycle_loss
+                           + self.hparams.lambda_cyc * sf_cycle_loss \
+                           + self.hparams.lambda_sf_reg * sf_min_loss
 
         if self.hparams.gan_type != None:
             # Adversarial training
