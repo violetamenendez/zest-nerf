@@ -39,11 +39,11 @@ from networks import Embedding, MVSNeRF, MVSNet, MVSNeRF_G, DyMVSNeRF_G, \
 from kornia.metrics import psnr, ssim
 import lpips
 
-from utils import build_rays, visualize_depth
+from utils import build_rays, visualize_depth, projection_from_ndc
 from renderer import rendering
 from opt import config_parser
 from data import dataset_dict
-from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, mse_masked
+from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, mse_masked, mae_masked
 
 logging.captureWarnings(True)
 coloredlogs.install(
@@ -357,6 +357,14 @@ class MVSNeRFSystem(LightningModule):
         # Scene Flow losses
         sceneflow_loss = 0
         if self.hparams.train_sceneflow:
+            # Camera parameters
+            N, V, C, H, W = batch['images'].shape
+            focal = batch['intrinsics'][..., 0, 0].item() # focal point
+            w2cs = batch['w2cs'] # Reference world-to-camera matrix
+            fnb_w2cs = batch['fnb_w2cs'] # First neighbours w2c matrix
+            # Time
+            frame_t = batch['time'] # Reference frame time
+            total_frames = batch['total_frames'] # Total number of frames in scene
             # RGB maps
             rgb_map_ref = results['rgb_map_ref'] # Blended RGB map (dynamic + static)
             rgb_map_ref_dy = results['rgb_map_ref_dy'] # Dynamic-only RGB map at current time frame_t
@@ -370,9 +378,17 @@ class MVSNeRFSystem(LightningModule):
             raw_sf_post2ref = results['raw_sf_post2ref'] # scene flow: (frame_t + 1) -> frame_t
             raw_sf_ref2prev = results['raw_sf_ref2prev'] # scene flow: frame_t -> (frame_t - 1)
             raw_sf_prev2ref = results['raw_sf_prev2ref'] # scene flow: (frame_t - 1) -> frame_t
+            # Optical flow - ground truth
+            rays_flow_fwd_gt = results['rays_flow_fwd_gt']
+            rays_flow_bwd_gt = results['rays_flow_bwd_gt']
+            rays_mask_fwd_gt = results['rays_mask_fwd_gt']
+            rays_mask_bwd_gt = results['rays_mask_bwd_gt']
             # Alpha-compositing weights
             weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
             weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
+            # Raw points
+            raw_pts_post = results['raw_pts_post'] # Raw points as fed into NeRF (frame_t + 1)
+            raw_pts_prev = results['raw_pts_prev'] # Raw points as fed into NeRF (frame_t - 1)
 
             ##########################################
             # Temporal photometric consistency - l_pho
@@ -444,9 +460,55 @@ class MVSNeRFSystem(LightningModule):
             self.log('sf_min_loss', self.hparams.lambda_sf_reg * sf_min_loss)
             ###############################
 
+            ### Data-driven priors ###
+            # For initialisation - decay to 0 during training
+            divisor = self.global_step // (self.decay_iteration * 1000)
+            decay_rate = 10
+            w_of = self.hparams.lambda_optical_flow / (decay_rate ** divisor)
+            w_depth = self.hparams.lambda_sf_depth / (decay_rate ** divisor)
+
+            #########################
+            # Geometric consistency #
+            #########################
+            # Build accurate correspondence association between adjacent frames,
+            # minimising reprojection error of scene flow displaced 3D points
+            # with respect the derived 2D optical flow
+            # TODO - this needs to be the matrices for post and prev poses!!
+            render_of_fwd = projection_from_ndc(fnb_w2cs[:,1], H, W, focal,
+                                                weights_ref_dy,
+                                                raw_pts_post)
+            render_of_bwd = projection_from_ndc(fnb_w2cs[:,0], H, W, focal,
+                                                weights_ref_dy,
+                                                raw_pts_prev)
+            if frame_t == 0:
+                # First frame only has forward flow
+                flow_loss = mae_masked(render_of_fwd,
+                                       rays_flow_fwd_gt,
+                                       rays_mask_fwd_gt.unsqueeze(-1))
+            elif frame_t == total_frames - 1:
+                # Last frame only has backward flow
+                flow_loss = mae_masked(render_of_bwd,
+                                       rays_flow_bwd_gt,
+                                       rays_mask_bwd_gt.unsqueeze(-1))
+            else:
+                flow_loss = mae_masked(render_of_fwd,
+                                       rays_flow_fwd_gt,
+                                       rays_mask_fwd_gt.unsqueeze(-1))
+                flow_loss += mae_masked(render_of_bwd,
+                                        rays_flow_bwd_gt,
+                                        rays_mask_bwd_gt.unsqueeze(-1))
+            self.log('flow_loss', w_of * flow_loss)
+            #########################
+
+            # For initialisation - decay to 0 during training
+            divisor = self.global_step // (self.decay_iteration * 1000)
+            decay_rate = 10
+            w_of = self.hparams.lambda_optical_flow / (decay_rate ** divisor)
+
             sceneflow_loss = pho_loss + combined_loss \
                            + self.hparams.lambda_cyc * sf_cycle_loss \
-                           + self.hparams.lambda_sf_reg * sf_min_loss
+                           + self.hparams.lambda_sf_reg * sf_min_loss \
+                           + w_of * flow_loss
 
         if self.hparams.gan_type != None:
             # Adversarial training

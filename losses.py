@@ -96,3 +96,18 @@ def mse_masked(pred, gt, mask):
 	num_pix = torch.sum(mask_rep) + 1e-8
 	mse = torch.sum(((pred - gt) ** 2) * mask_rep) / num_pix
 	return mse
+
+def mae_masked(pred, gt, mask):
+	"""Returns the Mean Absolute Error of a predicted image in only the masked region
+
+	Inputs:
+	- pred: [N,N_rays, 3]
+	- gt: [N,N_rays, 3]
+	- mask: [N,N_rays, 1]
+	"""
+
+	d = [1 for t in range(pred.dim() - 1)] # Num of dimensions to keep as they are
+	mask_rep = mask.repeat(*d, pred.size(-1)) # Repeat along the last dimension
+	num_pix = torch.sum(mask_rep) + 1e-8
+	mae = torch.sum(torch.abs(pred - gt) * mask_rep) / num_pix
+	return mae

@@ -481,6 +481,13 @@ class DyMVSNeRF_G(nn.Module):
         num_frames = x['total_frames'].item()
         ref_frame_idx = frame_t/num_frames * 2. - 1.0 # normalised frame index for reference image
 
+        # Ground truth optical flow
+        flow_fwds = x['flow_fwds']
+        flow_bwds = x['flow_bwds']
+        # Ground truth motion masks
+        mask_fwds = x['mask_fwds']
+        mask_bwds = x['mask_bwds']
+
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
         volume_feature = None
@@ -500,7 +507,8 @@ class DyMVSNeRF_G(nn.Module):
             build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
                           N_rays=self.N_rays, pad=self.args.pad,
                           patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
-                          step=step, variable_patches=(self.args.gan_type=='graf'))
+                          step=step, variable_patches=(self.args.gan_type=='graf'), scene_flow=True,
+                          flow_fwd=flow_fwds, flow_bwd=flow_bwds, mask_fwd=mask_fwds, mask_bwd=mask_bwds)
 
         self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
 
@@ -528,6 +536,10 @@ class DyMVSNeRF_G(nn.Module):
         ret['target_s'] = target_s
         ret['depth_gt'] = rays_depth_gt
         ret['t_vals'] = t_vals
+        ret['rays_flow_fwd_gt'] = rays_flow_fwd_gt
+        ret['rays_flow_bwd_gt'] = rays_flow_bwd_gt
+        ret['rays_mask_fwd_gt'] = rays_mask_fwd_gt
+        ret['rays_mask_bwd_gt'] = rays_mask_bwd_gt
 
         return ret
 

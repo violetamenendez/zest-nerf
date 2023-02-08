@@ -486,6 +486,40 @@ def build_color_volume(point_samples, data_mvs, imgs, img_feat=None, downscale=1
     logging.info("outputs "+str(colors.shape))
     return colors
 
+def NDC2Euclidean(xyz_ndc, H, W, f):
+    z_e = 2./ (xyz_ndc[..., 2:3] - 1. + 1e-6)
+    x_e = - xyz_ndc[..., 0:1] * z_e * W/ (2. * f)
+    y_e = - xyz_ndc[..., 1:2] * z_e * H/ (2. * f)
+
+    xyz_e = torch.cat([x_e, y_e, z_e], -1)
+
+    return xyz_e
+
+def se3_transform_points(pts_ref, raw_rot_ref2prev, raw_trans_ref2prev):
+    pts_prev = torch.squeeze(torch.matmul(raw_rot_ref2prev, pts_ref[..., :3].unsqueeze(-1)) + raw_trans_ref2prev, -1)
+    return pts_prev
+
+# NOTE: WE DO IN COLMAP/OPENCV FORMAT, BUT INPUT IS OPENGL FORMAT!!!!!1
+def perspective_projection(pts_3d, h, w, f):
+    pts_2d = torch.cat([pts_3d[..., 0:1] * f/-pts_3d[..., 2:3] + w/2.,
+                       -pts_3d[..., 1:2] * f/-pts_3d[..., 2:3] + h/2.], dim=-1)
+
+    return pts_2d
+
+def projection_from_ndc(w2c, H, W, f, weights_ref, raw_pts):
+    R_w2c = w2c[..., :3, :3] # Rotation
+    t_w2c = w2c[..., :3, 3:] # translation
+
+    pts_3d = torch.sum(weights_ref[..., None] * raw_pts, -2)  # [N_rays, 3]
+
+    pts_3d_e_world = NDC2Euclidean(pts_3d, H, W, f)
+
+    pts_3d_e_local = se3_transform_points(pts_3d_e_world, R_w2c, t_w2c)
+
+    pts_2d = perspective_projection(pts_3d_e_local, H, W, f)
+
+    return pts_2d
+
 #################################### Image tools ###############################
 
 def read_pfm(filename):
