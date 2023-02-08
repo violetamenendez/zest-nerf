@@ -43,7 +43,7 @@ from utils import build_rays, visualize_depth, projection_from_ndc
 from renderer import rendering
 from opt import config_parser
 from data import dataset_dict
-from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, mse_masked, mae_masked
+from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, mse_masked, mae_masked, compute_depth_loss
 
 logging.captureWarnings(True)
 coloredlogs.install(
@@ -389,6 +389,8 @@ class MVSNeRFSystem(LightningModule):
             # Raw points
             raw_pts_post = results['raw_pts_post'] # Raw points as fed into NeRF (frame_t + 1)
             raw_pts_prev = results['raw_pts_prev'] # Raw points as fed into NeRF (frame_t - 1)
+            # Depth map
+            depth_map_ref_dy = results['depth_map_ref_dy']
 
             ##########################################
             # Temporal photometric consistency - l_pho
@@ -500,15 +502,20 @@ class MVSNeRFSystem(LightningModule):
             self.log('flow_loss', w_of * flow_loss)
             #########################
 
-            # For initialisation - decay to 0 during training
-            divisor = self.global_step // (self.decay_iteration * 1000)
-            decay_rate = 10
-            w_of = self.hparams.lambda_optical_flow / (decay_rate ** divisor)
+            ###########################
+            # Single-view depth prior #
+            ###########################
+            # Encourages the expected termination depth computed along each ray
+            # to be close to the depth predicted from a pre-trained single view network.
+            sf_depth_loss = compute_depth_loss(depth_map_ref_dy, -depth_gt) # NOTE - I think this is disparity, not depth
+            self.log('sf_depth_loss', w_depth * sf_depth_loss)
+            ###########################
 
             sceneflow_loss = pho_loss + combined_loss \
                            + self.hparams.lambda_cyc * sf_cycle_loss \
                            + self.hparams.lambda_sf_reg * sf_min_loss \
-                           + w_of * flow_loss
+                           + w_of * flow_loss \
+                           + w_depth * sf_depth_loss
 
         if self.hparams.gan_type != None:
             # Adversarial training

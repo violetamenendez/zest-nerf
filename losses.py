@@ -111,3 +111,27 @@ def mae_masked(pred, gt, mask):
 	num_pix = torch.sum(mask_rep) + 1e-8
 	mae = torch.sum(torch.abs(pred - gt) * mask_rep) / num_pix
 	return mae
+
+def compute_depth_loss(pred_depth, gt_depth):
+	"""Compute scene flow depth loss
+
+	Encourage the expected termination deth computed along each ray
+	to be close to the depth predicted from a pre-trained single view network.
+	As single-view depth predictions are defined up to an unknown scale and shift,
+	we use a robust scale-shift invatian loss where the depth goes through a whitening
+	operation that normalises the depth to have zero mean and unit scale
+	"""
+
+	# Normalise predicted depth
+	t_pred = torch.median(pred_depth)
+	s_pred = torch.mean(torch.abs(pred_depth - t_pred))
+
+	# Normalise ground truth depth
+	t_gt = torch.median(gt_depth)
+	s_gt = torch.mean(torch.abs(gt_depth - t_gt))
+
+	pred_depth_n = (pred_depth - t_pred)/s_pred
+	gt_depth_n = (gt_depth - t_gt)/s_gt
+
+	# This is different from the paper NSFF where they say the loss is L1
+	return torch.mean(torch.pow(pred_depth_n - gt_depth_n, 2))
