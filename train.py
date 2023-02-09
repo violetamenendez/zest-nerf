@@ -366,6 +366,7 @@ class MVSNeRFSystem(LightningModule):
             # Time
             frame_t = batch['time'] # Reference frame time
             total_frames = batch['total_frames'] # Total number of frames in scene
+            chain_bwd = results['chain_bwd'] # Bool - True: chain (frame_t - 2), False: chain (frame_t + 2)
             # RGB maps
             rgb_map_ref = results['rgb_map_ref'] # Blended RGB map (dynamic + static)
             rgb_map_ref_dy = results['rgb_map_ref_dy'] # Dynamic-only RGB map at current time frame_t
@@ -393,6 +394,7 @@ class MVSNeRFSystem(LightningModule):
             raw_pts_ref = results['raw_pts_ref'] # Reference time frame_t
             raw_pts_post = results['raw_pts_post'] # (frame_t + 1)
             raw_pts_prev = results['raw_pts_prev'] # (frame_t - 1)
+            raw_pts_pp = results['raw_pts_pp'] # (frame_t - 2) or (frame_t + 2)
             # Depth map
             depth_map_ref_dy = results['depth_map_ref_dy']
 
@@ -490,6 +492,18 @@ class MVSNeRFSystem(LightningModule):
                                              raw_pts_post,
                                              raw_pts_prev,
                                              H, W, focal)
+            if chain_bwd:
+                # (frame_t - 2)
+                sf_st_loss += compute_sf_lke_loss(raw_pts_prev,
+                                                  raw_pts_ref,
+                                                  raw_pts_pp,
+                                                  H, W, focal)
+            else:
+                # (frame_t + 2)
+                sf_st_loss += compute_sf_lke_loss(raw_pts_post,
+                                                  raw_pts_pp,
+                                                  raw_pts_ref,
+                                                  H, W, focal)
             self.log('sf_st_loss', self.hparams.lambda_sf_smooth * sf_st_loss)
 
 

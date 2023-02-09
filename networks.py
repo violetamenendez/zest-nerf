@@ -540,6 +540,7 @@ class DyMVSNeRF_G(nn.Module):
         ret['rays_flow_bwd_gt'] = rays_flow_bwd_gt
         ret['rays_mask_fwd_gt'] = rays_mask_fwd_gt
         ret['rays_mask_bwd_gt'] = rays_mask_bwd_gt
+        ret['chain_bwd'] = self.chain_bwd
 
         return ret
 
