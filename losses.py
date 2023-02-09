@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import torch
+import torchvision
+
+from utils import NDC2Euclidean
 
 def gradient_x(img):
 	gx = img[:,:,:-1,:] - img[:,:,1:,:]
@@ -135,3 +138,66 @@ def compute_depth_loss(pred_depth, gt_depth):
 
 	# This is different from the paper NSFF where they say the loss is L1
 	return torch.mean(torch.pow(pred_depth_n - gt_depth_n, 2))
+
+def compute_sf_smooth_loss(pts_1_ndc, pts_2_ndc, H, W, f):
+	"""Compute scene flow spatial smoothness loss
+
+	Scene flow spatial smoothness minimizes the weighted l1 difference
+	between scenes flows sampled at neighboring 3D position along each ray
+	"""
+	n = pts_1_ndc.shape[-2] # number of samples per ray
+
+	# Discard farthest ray samples?
+	pts_1_ndc_close = pts_1_ndc[..., :int(n * 0.95), :]
+	pts_2_ndc_close = pts_2_ndc[..., :int(n * 0.95), :]
+
+	pts_3d_1_world = NDC2Euclidean(pts_1_ndc_close, H, W, f)
+	pts_3d_2_world = NDC2Euclidean(pts_2_ndc_close, H, W, f)
+
+	# scene flow
+	scene_flow_world = pts_3d_1_world - pts_3d_2_world
+
+	return torch.mean(torch.abs(scene_flow_world[..., :-1, :] - scene_flow_world[..., 1:, :]))
+
+# Least kinetic motion prior
+def compute_sf_lke_loss(pts_ref_ndc, pts_post_ndc, pts_prev_ndc, H, W, f):
+	"""Compute scene flow temporal smoothness loss
+
+	Scene flow temporal smoothness, inspired by Vo et al. [9], encourages 3D point
+	trajectories to be piece-wise linear with least kinetic energy prior. This is
+	equivalent to minimizing sum of forward scene flow and backward scene flow from
+	each sampled 3D point along the ray
+
+	Inputs:
+	- pts_ref_ndc: [N, N_rays, N_samples, 3] ndc rays at time t
+	- pts_post_ndc: [N, N_rays, N_samples, 3] ndc rays at time t+1
+	calculated using estimated flow fields
+	- pts_prev_ndc: [N, N_rays, N_samples, 3] ndc rays at time t-1
+	calculated using estimated flow fields
+	- H: image height
+	- W: image width
+	- f: camera focal point
+	"""
+	n = pts_ref_ndc.shape[-2]
+
+	pts_ref_ndc_close = pts_ref_ndc[..., :int(n * 0.9), :]
+	pts_post_ndc_close = pts_post_ndc[..., :int(n * 0.9), :]
+	pts_prev_ndc_close = pts_prev_ndc[..., :int(n * 0.9), :]
+
+	pts_3d_ref_world = NDC2Euclidean(pts_ref_ndc_close, H, W, f)
+	pts_3d_post_world = NDC2Euclidean(pts_post_ndc_close, H, W, f)
+	pts_3d_prev_world = NDC2Euclidean(pts_prev_ndc_close, H, W, f)
+
+	# scene flow
+	scene_flow_w_ref2post = pts_3d_post_world - pts_3d_ref_world
+	scene_flow_w_prev2ref = pts_3d_ref_world - pts_3d_prev_world
+
+	if False:
+		# Visualisation
+		cat_img = torch.concat([pts_ref_ndc_close, pts_post_ndc_close, pts_prev_ndc_close,
+								pts_3d_ref_world, pts_3d_post_world, pts_3d_prev_world,
+								scene_flow_w_ref2post, scene_flow_w_prev2ref])
+		torchvision.utils.save_image(cat_img.permute(0, 3, 1, 2), "vis_sceneflow_lke/cat_img3.png")
+		exit()
+
+	return 0.5 * torch.mean((scene_flow_w_ref2post - scene_flow_w_prev2ref) ** 2)

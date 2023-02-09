@@ -43,7 +43,8 @@ from utils import build_rays, visualize_depth, projection_from_ndc
 from renderer import rendering
 from opt import config_parser
 from data import dataset_dict
-from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, mse_masked, mae_masked, compute_depth_loss
+from losses import total_variation_loss, get_disparity_smoothness, distortion_loss, \
+    mse_masked, mae_masked, compute_depth_loss, compute_sf_smooth_loss, compute_sf_lke_loss
 
 logging.captureWarnings(True)
 coloredlogs.install(
@@ -386,9 +387,10 @@ class MVSNeRFSystem(LightningModule):
             # Alpha-compositing weights
             weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
             weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
-            # Raw points
-            raw_pts_post = results['raw_pts_post'] # Raw points as fed into NeRF (frame_t + 1)
-            raw_pts_prev = results['raw_pts_prev'] # Raw points as fed into NeRF (frame_t - 1)
+            # Raw points - as fed into NeRF
+            raw_pts_ref = results['raw_pts_ref'] # Reference time frame_t
+            raw_pts_post = results['raw_pts_post'] # (frame_t + 1)
+            raw_pts_prev = results['raw_pts_prev'] # (frame_t - 1)
             # Depth map
             depth_map_ref_dy = results['depth_map_ref_dy']
 
@@ -462,6 +464,33 @@ class MVSNeRFSystem(LightningModule):
             self.log('sf_min_loss', self.hparams.lambda_sf_reg * sf_min_loss)
             ###############################
 
+            ########################################
+            # Scene flow spatial smoothness - l_sp #
+            ########################################
+            # Scene flow spatial smoothness minimizes the weighted l_1 difference
+            # between scenes flows sampled at neighboring 3D position along each ray.
+            sf_sp_loss = compute_sf_smooth_loss(raw_pts_ref,
+                                                raw_pts_post,
+                                                H, W, focal)
+            sf_sp_loss += compute_sf_smooth_loss(raw_pts_ref,
+                                                 raw_pts_prev,
+                                                 H, W, focal)
+            self.log('sf_sm_loss', self.hparams.lambda_sf_smooth * sf_sp_loss)
+
+            ###########################################
+            # Scene flow temporal smoothness - l_temp #
+            ###########################################
+            # Inspired by Vo et al., encourages 3D point trajectories to be
+            # piece-wise linear with least kinetic energy prior.
+            # This is equivalent to minimizing sum of forward scene flow
+            # and backward scene flow from each sampled 3D point along the ray
+            sf_st_loss = compute_sf_lke_loss(raw_pts_ref,
+                                             raw_pts_post,
+                                             raw_pts_prev,
+                                             H, W, focal)
+            self.log('sf_st_loss', self.hparams.lambda_sf_smooth * sf_st_loss)
+
+
             ### Data-driven priors ###
             # For initialisation - decay to 0 during training
             divisor = self.global_step // (self.decay_iteration * 1000)
@@ -514,6 +543,8 @@ class MVSNeRFSystem(LightningModule):
             sceneflow_loss = pho_loss + combined_loss \
                            + self.hparams.lambda_cyc * sf_cycle_loss \
                            + self.hparams.lambda_sf_reg * sf_min_loss \
+                           + self.hparams.lambda_sf_smooth * sf_sp_loss \
+                           + self.hparams.lambda_sf_smooth * sf_st_loss \
                            + w_of * flow_loss \
                            + w_depth * sf_depth_loss
 
