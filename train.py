@@ -387,6 +387,8 @@ class MVSNeRFSystem(LightningModule):
             # Alpha-compositing weights
             weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
             weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
+            # Blending weights - estimated by static NeRF
+            raw_blend_w = results['raw_blend_w']
             # Raw points - as fed into NeRF
             raw_pts_ref = results['raw_pts_ref'] # Reference time frame_t
             raw_pts_post = results['raw_pts_post'] # (frame_t + 1)
@@ -491,6 +493,17 @@ class MVSNeRFSystem(LightningModule):
             self.log('sf_st_loss', self.hparams.lambda_sf_smooth * sf_st_loss)
 
 
+            ################
+            # Entropy loss #
+            ################
+            # This loss encourages blending weight to be either 0 or 1, which can help
+            # to reduce the ghosting caused by learned semi-transparent blending weight.
+            # NOTE - this was added to NSFF after paper
+            entropy_loss = torch.mean(-raw_blend_w * torch.log(raw_blend_w + 1e-8))
+            self.log('entropy_loss', self.hparams.lambda_blending_reg * entropy_loss)
+            ################
+
+
             ### Data-driven priors ###
             # For initialisation - decay to 0 during training
             divisor = self.global_step // (self.decay_iteration * 1000)
@@ -545,6 +558,7 @@ class MVSNeRFSystem(LightningModule):
                            + self.hparams.lambda_sf_reg * sf_min_loss \
                            + self.hparams.lambda_sf_smooth * sf_sp_loss \
                            + self.hparams.lambda_sf_smooth * sf_st_loss \
+                           + self.hparams.lambda_blending_reg * entropy_loss \
                            + w_of * flow_loss \
                            + w_depth * sf_depth_loss
 

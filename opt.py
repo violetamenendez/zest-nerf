@@ -100,6 +100,8 @@ def config_parser(cmd=None):
                         help='Scene flow depth loss coefficient')
     parser.add_argument("--lambda_optical_flow", type=float, default=0.02,
                         help='Optical flow loss coefficient')
+    parser.add_argument("--lambda_blending_reg", type=float, default=1e-3,
+                        help='Blending weights regularization loss coefficient')
     parser.add_argument('--time_code_dim', type=float, default=1024,
                         help='Set dimension of dynamic latent codes')
     parser.add_argument("--decay_iteration", type=int, default=50,
