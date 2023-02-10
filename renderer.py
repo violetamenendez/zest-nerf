@@ -420,8 +420,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     raw_rgba_ref = raw_ref_t[..., :4] # rgb colour and alpha density
     raw_sf_ref2prev = raw_ref_t[..., 4:7] # scene flow from reference frame to previous frame
     raw_sf_ref2post = raw_ref_t[..., 7:10] # scene flow from reference frame to following frame
-    raw_prob_ref2prev = raw_ref_t[..., 10] # confidence?
-    raw_prob_ref2post = raw_ref_t[..., 11] # confidence?
+    raw_prob_ref2prev = raw_ref_t[..., 10] # disocclusion weights
+    raw_prob_ref2post = raw_ref_t[..., 11] # disocclusion weights
 
     # Render blended NeRFs (static + dynamic)
     rgb_map_ref, depth_map_ref, \
@@ -432,17 +432,16 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     # Blended weights (static w + dynamic w)
     weights_map_dd = torch.sum(weights_ref_dd, -1).detach()
 
-    ret = {'rgb_map_ref': rgb_map_ref, # RGB map with blended weights
-           'depth_map_ref' : depth_map_ref, # Depth map with both weights
-           'rgb_map_ref_dy': rgb_map_ref_dy, # RGB map with dynamic weights only
-           'depth_map_ref_dy': depth_map_ref_dy, # depth map with dynamic weights only
-           'weights_map_dd': weights_map_dd} # dynamic blending weights with rigid weights ??
-
+    ret = {'rgb_map_ref': rgb_map_ref, # Blended RGB map
+           'depth_map_ref' : depth_map_ref, # Blended depth map
+           'rgb_map_ref_dy': rgb_map_ref_dy, # Dynamic-only RGB map
+           'depth_map_ref_dy': depth_map_ref_dy, # Dynamic-only depth map
+           'weights_map_dd': weights_map_dd} # Dynamic part of the blended alpha-compositing weights
     # TODO - only in training mode?
     ret['raw_sf_ref2prev'] = raw_sf_ref2prev
     ret['raw_sf_ref2post'] = raw_sf_ref2post
     ret['raw_pts_ref'] = raw_pts_ref[..., :3]
-    ret['weights_ref_dy'] = weights_ref_dy # weights_ref_dy, weights with dynamic alpha only
+    ret['weights_ref_dy'] = weights_ref_dy # Dynamic-only alpha-compositing weights
     ret['raw_blend_w'] = raw_blend_w
     ret['raw_prob_ref2prev'] = raw_prob_ref2prev
     ret['raw_prob_ref2post'] = raw_prob_ref2post
