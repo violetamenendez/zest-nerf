@@ -471,7 +471,7 @@ class DyMVSNeRF_G(nn.Module):
         imgs = self.unpreprocess(imgs) # unnormalise for visualisation
 
         # Ray generation from images and camera positions
-        # Should this be in decode? TODO
+        # NOTE: I think this is the same for NSFF (or equivalent)
         rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals = \
             build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
                        N_rays=self.N_rays, pad=self.args.pad,
