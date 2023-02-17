@@ -399,10 +399,17 @@ class MVSNeRFSystem(LightningModule):
             self.log('pho_loss', pho_loss)
             ##########################################
 
-            # Blended image (dy + static) rendering loss
-            pho_loss += self.loss(rgb_map_ref, rgb_gt)
 
-            sceneflow_loss = pho_loss
+            ########################
+            # Combined loss - l_cb #
+            ########################
+            # Blended image (dy + static) rendering loss
+            combined_loss = self.loss(rgb_map_ref, rgb_gt)
+            self.log('combined_loss', combined_loss)
+            ########################
+
+
+            sceneflow_loss = pho_loss + combined_loss
 
         if self.hparams.gan_type != None:
             # Adversarial training
