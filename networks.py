@@ -173,11 +173,11 @@ class Renderer(nn.Module):
         if self.predict_sceneflow:
             if self.static:
                 # Static NeRF
-                v = F.sigmoid(self.w_linear(pts))
+                blend_w = F.sigmoid(self.w_linear(pts)) # blending weights
             else:
                 # Dynamic NeRF
-                sf = F.tanh(self.sf_linear(pts))
-                prob = F.sigmoid(self.prob_linear(pts))
+                sf = F.tanh(self.sf_linear(pts)) # scene flow
+                prob = F.sigmoid(self.prob_linear(pts)) # confidence
 
         if self.use_viewdirs:
             # Alpha depends only on 3D points
@@ -201,7 +201,7 @@ class Renderer(nn.Module):
         if self.predict_sceneflow:
             if self.static:
                 # Static NeRF
-                outputs = torch.cat([outputs, v], -1)
+                outputs = torch.cat([outputs, blend_w], -1)
             else:
                 # Dynamic NeRF
                 outputs = torch.cat([outputs, sf, prob], dim=-1)
@@ -419,17 +419,18 @@ class MVSNeRF_G(nn.Module):
         return rgb, target_s, depth_pred, rays_depth_gt, weights, t_vals
 
 class DyMVSNeRF_G(nn.Module):
-    def __init__(self, args, nerf_dynamic, nerf_static, encoding, embedding_pts, embedding_dir):
+    def __init__(self, args, nerf_dynamic, nerf_static, encoding, embedding_pts, embedding_xyzt, embedding_dir):
         """
         Generator using MVSNeRF
         """
-        super(MVSNeRF_G, self).__init__()
+        super(DyMVSNeRF_G, self).__init__()
 
         # Networks
         self.nerf_dynamic = nerf_dynamic
         self.nerf_static = nerf_static
         self.encoding_net = encoding
         self.embedding_pts = embedding_pts
+        self.embedding_xyzt = embedding_xyzt
         self.embedding_dir = embedding_dir
 
         # Parameters
@@ -485,11 +486,14 @@ class DyMVSNeRF_G(nn.Module):
                                                            volume_feature,
                                                            imgs[:, :-1],
                                                            img_feat=None,
-                                                           network_fn=self.nerf,
+                                                           network_fn=self.nerf_static,
+                                                           network_fn_dy=self.nerf_dynamic,
                                                            embedding_pts=self.embedding_pts,
+                                                           embedding_xyzt=self.embedding_xyzt,
                                                            embedding_dir=self.embedding_dir,
                                                            time_codes=time_codes,
-                                                           white_bkgd=self.args.white_bkgd)
+                                                           white_bkgd=self.args.white_bkgd,
+                                                           scene_flow=True)
 
         depth_pred = depth_pred.unsqueeze(-1)
         logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape)+", " \

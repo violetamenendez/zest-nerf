@@ -94,6 +94,10 @@ class MVSNeRFSystem(LightningModule):
         self.embedding_dir = Embedding(self.hparams.dir_dim, self.hparams.multires_views) if dir_embedder else None
         self.embeddings = [self.embedding_xyz, self.embedding_dir]
 
+        if self.hparams.train_sceneflow:
+            self.embedding_xyzt = Embedding(self.hparams.pts_dim + 1, self.hparams.multires) if pts_embedder else None
+            self.embeddings += [self.embedding_xyzt]
+
         # Define NeRF layer sizes depending on input channels
         self.input_ch = self.embedding_xyz.out_channels if self.embedding_xyz else self.hparams.pts_dim
         if self.hparams.train_video:
@@ -140,8 +144,9 @@ class MVSNeRFSystem(LightningModule):
         # Define static or dynamic Generator: Enc volume -> NeRF -> Vol Rendering
         if self.hparams.train_sceneflow:
             self.generator = DyMVSNeRF_G(self.hparams,
-                                         self.nerf_coarse, self.encoding_net,
-                                         self.embedding_xyz, self.embedding_dir)
+                                         self.nerf_dynamic, self.nerf_static,
+                                         self.encoding_net, self.embedding_xyz,
+                                         self.embedding_xyzt, self.embedding_dir)
         else:
             self.generator = MVSNeRF_G(self.hparams,
                                        self.nerf_coarse, self.encoding_net,

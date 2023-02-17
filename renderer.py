@@ -149,6 +149,53 @@ def raw2outputs(raw, z_vals, dists, white_bkgd=False, net_type='v2'):
         +str(acc_map.shape)+","+str(weights.shape)+","+str(depth_map.shape)+","+str(alpha.shape))
     return rgb_map, disp_map, acc_map, weights, depth_map, alpha
 
+def raw2outputs_blending(raw_dy,
+                         raw_rigid,
+                         raw_blend_w,
+                         z_vals, dists,
+                         raw_noise_std):
+    act_fn = F.relu
+
+    device = z_vals.device
+
+    rgb_dy = torch.sigmoid(raw_dy[..., :3])  # [N_rays, N_samples, 3]
+    rgb_rigid = torch.sigmoid(raw_rigid[..., :3])  # [N_rays, N_samples, 3]
+
+    noise = 0.
+    if raw_noise_std > 0.:
+        noise = torch.randn(raw_dy[..., 3].shape) * raw_noise_std
+
+    opacity_dy = act_fn(raw_dy[..., 3] + noise)#.detach() #* raw_blend_w
+    opacity_rigid = act_fn(raw_rigid[..., 3] + noise)#.detach() #* (1. - raw_blend_w)
+
+    # alpha with blending weights
+    alpha_dy = (1. - torch.exp(-opacity_dy * dists) ) * raw_blend_w
+    alpha_rig = (1. - torch.exp(-opacity_rigid * dists)) * (1. - raw_blend_w)
+
+    Ts = torch.cumprod(torch.cat([torch.ones((*alpha_dy.shape[:2], 1), device=device),
+                                (1. - alpha_dy) * (1. - alpha_rig)  + 1e-10], -1), -1)[..., :-1]
+
+    weights_dy = Ts * alpha_dy
+    weights_rig = Ts * alpha_rig
+
+    # union map
+    rgb_map = torch.sum(weights_dy[..., None] * rgb_dy + \
+                        weights_rig[..., None] * rgb_rigid, -2)
+
+    weights_mix = weights_dy + weights_rig
+    depth_map = torch.sum(weights_mix * z_vals, -1)
+
+    # compute dynamic depth only
+    alpha_fg = 1. - torch.exp(-opacity_dy * dists)
+    weights_fg = alpha_fg * torch.cumprod(torch.cat([torch.ones((*alpha_fg.shape[:2], 1), device=device),
+                                                                 1.-alpha_fg + 1e-10], -1), -1)[..., :-1]
+    depth_map_fg = torch.sum(weights_fg * z_vals, -1)
+    rgb_map_fg = torch.sum(weights_fg[..., None] * rgb_dy, -2)
+
+    return rgb_map, depth_map, \
+           rgb_map_fg, depth_map_fg, weights_fg, \
+           weights_dy
+
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches."""
     logging.info("BATCHIFY")
@@ -167,7 +214,8 @@ def batchify(fn, chunk):
 
 def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
               volume_feature=None, imgs=None, img_feat=None, network_fn=None,
-              embedding_pts=None, embedding_dir=None, time_codes=None, white_bkgd=False):
+              network_fn_dy=None, embedding_pts=None, embedding_xyzt=None, embedding_dir=None,
+              time_codes=None, white_bkgd=False, scene_flow=False):
     """
     rays_dir: [N, N_rays, 3] (e.g. [N,1024,3])
     """
@@ -204,6 +252,7 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
     if time_codes is not None:
         N, N_rays, N_samples, _ = rays_ndc.shape
         time_codes = time_codes.expand(N, N_rays, N_samples, -1)
+        time_codes = F.sigmoid(time_codes)
 
     pts = rays_ndc
     if embedding_pts:
@@ -227,20 +276,48 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
     alpha_only = angle is None
     outputs_flat = batchify(network_fn, args.netchunk)(pts, alpha_only) # Apply nerf to points by chunks
 
-    raw = torch.reshape(outputs_flat, list(pts.shape[:-1]) + [outputs_flat.shape[-1]])
+    raw_static = torch.reshape(outputs_flat, list(pts.shape[:-1]) + [outputs_flat.shape[-1]])
     # raw = all the colours and densities of every sample point at every ray
 
-    if raw.shape[-1]>4:
-        input_feat = torch.cat((input_feat[...,:8],raw[...,4:]), dim=-1)
 
     dists = depth2dist(depth_candidates, cos_angle)
 
-    rgb_map, disp_map, acc_map, weights, depth_map, alpha = raw2outputs(raw,
-                                                                        depth_candidates,
-                                                                        dists,
-                                                                        white_bkgd,
-                                                                        args.net_type)
+    raw_rgba = raw_static[..., :4]
 
-    logging.info("outputs "+str(rgb_map.shape)+","+str(input_feat.shape)+"," \
-        +str(weights.shape)+","+str(depth_map.shape)+","+str(alpha.shape))
-    return rgb_map, input_feat, weights, depth_map, alpha
+    rgb_map, disp_map, acc_map, weights, depth_map, alpha = raw2outputs(raw_rgba,
+                                                                        depth_candidates,
+                                                                        dists, white_bkgd,
+                                                                        args.net_type)
+    if scene_flow:
+        # We need to blend things
+        raw_blend_w = raw_static[..., 4] #.squeeze()
+
+        # Dynamic NeRF
+        outputs_flat_dy = batchify(network_fn_dy, args.netchunk)(pts, alpha_only) # Apply nerf to points by chunks
+        raw_dy = torch.reshape(outputs_flat_dy, list(pts.shape[:-1]) + [outputs_flat_dy.shape[-1]])
+        raw_rgba_ref = raw_dy[..., :4]
+        raw_sf_ref2prev = raw_dy[..., 4:7] # scene flow to previous frame?
+        raw_sf_ref2post = raw_dy[..., 7:10] # sceme flow to following frame?
+
+        rgb_map_ref, depth_map_ref, \
+        rgb_map_ref_dy, depth_map_ref_dy, weights_ref_dy, \
+        weights_ref_dd = raw2outputs_blending(raw_rgba_ref, raw_rgba, raw_blend_w,
+                                              depth_candidates, dists, 0)
+
+        weights_map_dd = torch.sum(weights_ref_dd, -1).detach()
+
+        ret = {'rgb_map_ref': rgb_map_ref, 'depth_map_ref' : depth_map_ref,
+            'rgb_map_rig': rgb_map, 'depth_map_rig': depth_map,
+            'rgb_map_ref_dy': rgb_map_ref_dy,
+            'depth_map_ref_dy': depth_map_ref_dy,
+            'weights_map_dd': weights_map_dd}
+
+        ret['raw_sf_ref2prev'] = raw_sf_ref2prev
+        ret['raw_sf_ref2post'] = raw_sf_ref2post
+        ret['raw_pts_ref'] = rays_ndc[..., :3]
+        ret['weights_ref_dy'] = weights_ref_dy
+        ret['raw_blend_w'] = raw_blend_w
+
+
+    logging.info("outputs "+str(rgb_map.shape)+","+str(input_feat.shape)+","+str(weights.shape)+","+str(depth_map.shape)+","+str(alpha.shape))
+    return rgb_map, input_feat, weights, depth_map, alpha, raw_blend_w
