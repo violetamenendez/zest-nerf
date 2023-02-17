@@ -24,11 +24,10 @@ class NSFFDataset(Dataset):
         self.config_dir = Path(config_dir)
         self.split = split
         self.downSample = downSample
-        self.img_wh = (int(960*downSample),int(640*downSample))
+        self.img_wh = (int(360*downSample),int(480*downSample))
         assert self.img_wh[0] % 32 == 0 or self.img_wh[1] % 32 == 0, \
             'image width must be divisible by 32, you may need to modify the imgScale'
         self.max_len = max_len
-        self.closest_views = closest_views
         self.define_transforms()
         self.blender2opencv = np.array([[1, 0, 0, 0],
                                         [0,-1, 0, 0],
@@ -85,7 +84,7 @@ class NSFFDataset(Dataset):
         for scene in self.scenes:
 
             scene_path = self.root_dir / scene
-            poses_bounds = np.load(scene_path / 'poses_bounds.npy') # For each scene
+            poses_bounds = np.load(scene_path / 'dense' / 'poses_bounds.npy') # For each scene
 
             if self.split in ['train', 'val']:
                 assert len(poses_bounds) == len(self.image_paths[scene]), \
@@ -105,8 +104,7 @@ class NSFFDataset(Dataset):
             poses, _ = center_poses(poses, self.blender2opencv)
 
             # Step 3: correct scale so that the nearest depth is at a little more than 1.0
-            near_original = bounds.min()
-            scale_factor = near_original * 0.75  # 0.75 is the default parameter
+            scale_factor = np.percentile(bounds[:, 0], 5) * 0.9  # 0.75 is the default parameter, 0.9 from NSFF
             bounds /= scale_factor
             poses[..., 3] /= scale_factor
             self.bounds[scene] = bounds
@@ -146,33 +144,24 @@ class NSFFDataset(Dataset):
                                                     std=[0.229, 0.224, 0.225]),
                                         ])
 
-    def read_depth(self, filename, img_wh):
-        print(filename, img_wh)
-        depth_h = np.array(read_pfm(filename)[0], dtype=np.float32)  # (800, 800)
-        print("depth_h shape", depth_h.shape)
-        depth_h = cv2.resize(depth_h, None, fx=0.5, fy=0.5,
-                             interpolation=cv2.INTER_NEAREST)  # (600, 800)
-        print("depth_h shape", depth_h.shape)
-        depth_h = depth_h[44:556, 80:720]  # (512, 640)
-        print("depth_h shape", depth_h.shape)
-        depth_h = cv2.resize(depth_h, None, fx=self.downSample, fy=self.downSample,
-                             interpolation=cv2.INTER_NEAREST)  # !!!!!!!!!!!!!!!!!!!!!!!!!
-        print("depth_h shape", depth_h.shape)
-        depth = cv2.resize(depth_h, None, fx=1.0 / 4, fy=1.0 / 4,
-                           interpolation=cv2.INTER_NEAREST)  # !!!!!!!!!!!!!!!!!!!!!!!!!
-        mask = depth > 0
-
-        depth_h = cv2.resize(depth_h, img_wh)
-        print("depth_h shape", depth_h.shape)
-
-        return depth, mask, depth_h
-
-    def read_optical_flow(flow_path):
+    def read_optical_flow(self, flow_path, img_wh):
 
         data = np.load(flow_path)#, (w, h))
         flow, mask = data['flow'], data['mask']
         mask = np.float32(mask)
+        flow = cv2.resize(flow, img_wh)
+        mask = cv2.resize(mask, img_wh,
+                          interpolation=cv2.INTER_NEAREST)
+
         return flow, mask
+
+    def read_disp(self, filename, img_wh):
+
+        disp = np.load(filename)
+        disp = cv2.resize(disp, img_wh,
+                          interpolation=cv2.INTER_NEAREST)
+
+        return disp
 
     def __len__(self):
         return len(self.metas) if self.max_len <= 0 else self.max_len
@@ -181,37 +170,61 @@ class NSFFDataset(Dataset):
         scene, target_frame, num_frames = self.metas[idx]
         print(f"Selected target {scene}, {target_frame}, {num_frames}")
 
-        # Returns a list of all camera poses ordered from nearest to farthest
-        nearest_pose_ids = get_nearest_pose_ids(self.cam2worlds[scene][target_frame],
-                                                self.cam2worlds[scene],
-                                                #5,
-                                                len(self.cam2worlds[scene]),
-                                                tar_id=target_frame,
-                                                angular_dist_method='dist')
+        view_ids = [target_frame]
+        # First neighbours
+        first_nb_ids = [max(target_frame - 1, 0), # +-1 frames
+                        min(target_frame + 1, int(num_frames) - 1)]
+        # Second neighbours
+        second_nb_ids = [max(target_frame - 2, 0), # +-2 frames
+                         min(target_frame + 2, int(num_frames) - 1)]
 
-        if self.closest_views:
-            # Get nearest views to the target image
-            nearest_pose_ids = nearest_pose_ids[:5]
-        else:
-            # Get far views with re. target image
-            nearest_pose_ids = nearest_pose_ids[-8:]
 
-        # Select views
-        if self.split=='train':
-            ids = torch.randperm(5)[:3]
-            view_ids = [nearest_pose_ids[i] for i in ids] + [target_frame]
-        else:
-            view_ids = [nearest_pose_ids[i] for i in range(3)] + [target_frame]
-        print(f"Selecting cam views {view_ids}")
-
-        imgs, proj_mats = [], []
+        imgs, disps, proj_mats = [], [], []
         intrinsics, c2ws, w2cs = [],[],[]
-        depths_h = []
         flow_fwds, flow_bwds = [], []
         mask_fwds, mask_bwds = [], []
         near_fars = []
         near_far_source = torch.Tensor([self.bounds[scene][view_ids].min()*0.8, self.bounds[scene][view_ids].max()*1.2])
 
+        # Matrices for first neighbours +-1 frames
+        fnb_imgs, fnb_proj_mats = [], []
+        fnb_intr, fnb_c2ws, fnb_w2cs = [],[],[]
+        for i, vid in enumerate(first_nb_ids):
+            fnb_intr.append(self.intrinsics[scene][vid])
+            fnb_w2cs.append(self.world2cams[scene][vid])
+            fnb_c2ws.append(self.cam2worlds[scene][vid])
+
+            # Is this necessary for neighbours?
+            proj_mat_ls = self.proj_mats[scene][vid]
+            ref_proj_inv = np.linalg.inv(proj_mat_ls)
+            fnb_proj_mats += [proj_mat_ls @ ref_proj_inv]
+
+            # Get image
+            img = Image.open(self.image_paths[scene][vid]).convert('RGB')
+            img = img.resize(self.img_wh, Image.LANCZOS)
+            img = self.transform(img)  # (3, h, w)
+            fnb_imgs.append(self.src_transform(img))
+
+        # Matrices for second neighbours +-2 frames
+        snb_imgs, snb_proj_mats = [], []
+        snb_intr, snb_c2ws, snb_w2cs = [],[],[]
+        for i, vid in enumerate(first_nb_ids):
+            snb_intr.append(self.intrinsics[scene][vid])
+            snb_w2cs.append(self.world2cams[scene][vid])
+            snb_c2ws.append(self.cam2worlds[scene][vid])
+
+            # Is this necessary for neighbours?
+            proj_mat_ls = self.proj_mats[scene][vid]
+            ref_proj_inv = np.linalg.inv(proj_mat_ls)
+            snb_proj_mats += [proj_mat_ls @ ref_proj_inv]
+
+            # Get image
+            img = Image.open(self.image_paths[scene][vid]).convert('RGB')
+            img = img.resize(self.img_wh, Image.LANCZOS)
+            img = self.transform(img)  # (3, h, w)
+            snb_imgs.append(self.src_transform(img))
+
+        # Matrices for reference view
         for i, vid in enumerate(view_ids):
                 intrinsics.append(self.intrinsics[scene][vid])
                 w2cs.append(self.world2cams[scene][vid])
@@ -231,50 +244,58 @@ class NSFFDataset(Dataset):
                 img = self.transform(img)  # (3, h, w)
                 imgs.append(self.src_transform(img))
 
-                # Get depth map
-                if len(self.depth_files) > 0:
-                    depth_filename = random.choice(self.depth_files)
-                    depth, mask, depth_h = self.read_depth(depth_filename, self.img_wh)
-                    depth_h *= self.scale_factor
-                    depths_h.append(depth_h)
-                else:
-                    depths_h.append(np.zeros((self.img_wh[1], self.img_wh[0])))
-
                 # Optical flow
-                if self.optical_flow:
-                    if target_frame == 0:
-                        # First frame has only forwards flow field
-                        flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
-                        flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path)
-                        flow_bwd, bwd_mask = np.zeros_like(flow_fwd), np.zeros_like(fwd_mask)
-                    elif target_frame == num_frames - 1:
-                        # Last frame has only backwards flow field
-                        flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
-                        flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path)
-                        flow_fwd, fwd_mask = np.zeros_like(flow_bwd), np.zeros_like(bwd_mask)
-                    else:
-                        flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
-                        flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
-                        flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path)
-                        flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path)
-                    flow_fwds.append(flow_fwd)
-                    flow_bwds.append(flow_bwd)
-                    mask_fwds.append(fwd_mask)
-                    mask_bwds.append(bwd_mask)
+                if target_frame == 0:
+                    # First frame has only forwards flow field
+                    flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
+                    flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
+                    flow_bwd, bwd_mask = np.zeros_like(flow_fwd), np.zeros_like(fwd_mask)
+                elif target_frame == num_frames - 1:
+                    # Last frame has only backwards flow field
+                    flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
+                    flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
+                    flow_fwd, fwd_mask = np.zeros_like(flow_bwd), np.zeros_like(bwd_mask)
+                else:
+                    flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
+                    flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
+                    flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
+                    flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
+                flow_fwds.append(flow_fwd)
+                flow_bwds.append(flow_bwd)
+                mask_fwds.append(fwd_mask)
+                mask_bwds.append(bwd_mask)
+
+                disp_path = self.disp_paths[scene][target_frame]
+                disp = self.read_disp(disp_path, self.img_wh)
+                disps.append(disp)
 
         sample = {}
         sample['images'] = torch.stack(imgs).float()  # (V, 3, H, W)
-        sample['depths_h'] = torch.from_numpy(np.stack(depths_h)).float() # (V, H, W)
-        sample['flow_fwds'] = torch.from_numpy(np.stack(flow_fwds)).float() # (V, H, W)
-        sample['flow_bwds'] = torch.from_numpy(np.stack(flow_bwds)).float() # (V, H, W)
+        sample['depths'] = torch.from_numpy(np.stack(disps)).float() # (V, H, W)
+        sample['flow_fwds'] = torch.from_numpy(np.stack(flow_fwds)).float().permute(0, 3, 1, 2) # (V, 2, H, W)
+        sample['flow_bwds'] = torch.from_numpy(np.stack(flow_bwds)).float().permute(0, 3, 1, 2) # (V, 2, H, W)
         sample['mask_fwds'] = torch.from_numpy(np.stack(mask_fwds)).float() # (V, H, W)
         sample['mask_bwds'] = torch.from_numpy(np.stack(mask_bwds)).float() # (V, H, W)
         sample['w2cs'] = torch.stack(w2cs).float()  # (V, 4, 4)
         sample['c2ws'] = torch.stack(c2ws).float()  # (V, 4, 4)
-        sample['near_fars'] = torch.stack(near_fars).float()
-        sample['proj_mats'] = torch.from_numpy(np.stack(proj_mats)[:,:3]).float()
+        sample['near_fars'] = torch.stack(near_fars).float() # (V, 2)
+        sample['proj_mats'] = torch.from_numpy(np.stack(proj_mats)[:,:3]).float() # (V, 3, 4)
         sample['intrinsics'] = torch.stack(intrinsics).float()  # (V, 3, 3)
         sample['time'] = target_frame
         sample['total_frames'] = num_frames
+
+        # First neighbours
+        sample['fnb_imgs'] = torch.stack(fnb_imgs).float()  # (V, 3, H, W)
+        sample['fnb_w2cs'] = torch.stack(fnb_w2cs).float()  # (V, 4, 4)
+        sample['fnb_c2ws'] = torch.stack(fnb_c2ws).float()  # (V, 4, 4)
+        sample['fnb_intr'] = torch.stack(fnb_intr).float()  # (V, 3, 3)
+        sample['fnb_proj_mats'] = torch.from_numpy(np.stack(fnb_proj_mats)[:,:3]).float() # (V, 3, 4)
+
+        # Second neighbours
+        sample['snb_imgs'] = torch.stack(snb_imgs).float()  # (V, 3, H, W)
+        sample['snb_w2cs'] = torch.stack(snb_w2cs).float()  # (V, 4, 4)
+        sample['snb_c2ws'] = torch.stack(snb_c2ws).float()  # (V, 4, 4)
+        sample['snb_intr'] = torch.stack(snb_intr).float()  # (V, 3, 3)
+        sample['snb_proj_mats'] = torch.from_numpy(np.stack(snb_proj_mats)[:,:3]).float() # (V, 3, 4)
 
         return sample

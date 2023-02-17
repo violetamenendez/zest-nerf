@@ -476,7 +476,6 @@ class DyMVSNeRF_G(nn.Module):
         w2cs = x['w2cs']
         c2ws = x['c2ws']
         intrinsics = x['intrinsics']
-        depths = x['depths_h']
         frame_t = x['time'].item()
         num_frames = x['total_frames'].item()
         ref_frame_idx = frame_t/num_frames * 2. - 1.0 # normalised frame index for reference image
@@ -487,6 +486,8 @@ class DyMVSNeRF_G(nn.Module):
         # Ground truth motion masks
         mask_fwds = x['mask_fwds']
         mask_bwds = x['mask_bwds']
+        # Ground truth disparity
+        depths = x['depths']
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
