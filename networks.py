@@ -122,11 +122,11 @@ class Renderer(nn.Module):
                 self.prob_linear = nn.Linear(W, 2) # Occlusion weights (confidence)
 
         # He initialisation - from a normal distribution
-        self.pts_linears.apply(weights_init)
-        self.views_linears.apply(weights_init)
-        self.feature_linear.apply(weights_init)
-        self.alpha_linear.apply(weights_init)
-        self.rgb_linear.apply(weights_init)
+        # self.pts_linears.apply(weights_init)
+        # self.views_linears.apply(weights_init)
+        # self.feature_linear.apply(weights_init)
+        # self.alpha_linear.apply(weights_init)
+        # self.rgb_linear.apply(weights_init)
 
     def forward_alpha(self, x):
 
