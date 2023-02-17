@@ -69,9 +69,11 @@ def config_parser(cmd=None):
     parser.add_argument("--acc_grad", type=int, default=1,
                         help='number of batches to accumulate gradients over')
     parser.add_argument('--train_video', action='store_true',
-                        help='training of a dynamic scene')
+                        help='training of a dynamic scene by using time codes. See: https://neural-3d-video.github.io/')
     parser.add_argument('--key_frames', action='store_true',
                         help='training over keyframes of a video')
+    parser.add_argument('--train_sceneflow', action='store_true',
+                        help='training of a dynamic scene by predicting scene flow. See: https://www.cs.cornell.edu/~zl548/NSFF/')
 
     # Hyperparameters
     parser.add_argument("--lrate", type=float, default=5e-4,

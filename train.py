@@ -32,7 +32,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from collections import defaultdict
 
 # models
-from networks import Embedding, MVSNeRF, MVSNet, MVSNeRF_G, BasicDiscriminator, NLayerDiscriminator, PixelDiscriminator, GRAFDiscriminator
+from networks import Embedding, MVSNeRF, MVSNet, MVSNeRF_G, DyMVSNeRF_G, \
+    BasicDiscriminator, NLayerDiscriminator, PixelDiscriminator, GRAFDiscriminator
 
 # metrics
 from kornia.metrics import psnr, ssim
@@ -93,17 +94,35 @@ class MVSNeRFSystem(LightningModule):
         self.embedding_dir = Embedding(self.hparams.dir_dim, self.hparams.multires_views) if dir_embedder else None
         self.embeddings = [self.embedding_xyz, self.embedding_dir]
 
-        # Define coarse NeRF
+        # Define NeRF layer sizes depending on input channels
         self.input_ch = self.embedding_xyz.out_channels if self.embedding_xyz else self.hparams.pts_dim
         if self.hparams.train_video:
             self.input_ch += int(self.hparams.time_code_dim)
         self.input_ch_views = self.embedding_dir.out_channels if self.embedding_dir else self.hparams.dir_dim
         self.output_ch = 4
         skips = [4] # Maybe this should be defined somewhere else
-        self.nerf_coarse = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
+
+        self.models = []
+
+        if self.hparams.train_sceneflow:
+            # NSFF dynamic + static NeRFs. See https://www.cs.cornell.edu/~zl548/NSFF/
+            self.nerf_dynamic = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
                  input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
-                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type)
-        self.models = [self.nerf_coarse]
+                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
+                 sceneflow=True, static=False)
+            self.models += [self.nerf_dynamic]
+
+            self.nerf_static = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
+                 input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
+                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
+                 sceneflow=True, static=True)
+            self.models += [self.nerf_static]
+        else:
+            # Normal NeRF mode
+            self.nerf_coarse = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
+                    input_ch_pts=self.input_ch, output_ch=self.output_ch, skips=skips,
+                    input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type)
+            self.models += [self.nerf_coarse]
 
         # Default is no fine network.
         if self.hparams.N_importance > 0:
@@ -118,10 +137,15 @@ class MVSNeRFSystem(LightningModule):
             self.encoding_net = MVSNet()
             self.models += [self.encoding_net]
 
-        # Define Generator: Encoding volume -> NeRF -> Vol Rendering
-        self.generator = MVSNeRF_G(self.hparams,
-                                   self.nerf_coarse, self.encoding_net,
-                                   self.embedding_xyz, self.embedding_dir)
+        # Define static or dynamic Generator: Enc volume -> NeRF -> Vol Rendering
+        if self.hparams.train_sceneflow:
+            self.generator = DyMVSNeRF_G(self.hparams,
+                                         self.nerf_coarse, self.encoding_net,
+                                         self.embedding_xyz, self.embedding_dir)
+        else:
+            self.generator = MVSNeRF_G(self.hparams,
+                                       self.nerf_coarse, self.encoding_net,
+                                       self.embedding_xyz, self.embedding_dir)
 
         # Define type of GAN
         if self.hparams.gan_loss == "naive":

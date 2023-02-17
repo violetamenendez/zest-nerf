@@ -71,7 +71,9 @@ def weights_init(m):
             nn.init.zeros_(m.bias.data)
 
 class Renderer(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, input_ch_feat=8, skips=[4], use_viewdirs=False):
+    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4,
+                 input_ch_feat=8, skips=[4], use_viewdirs=False,
+                 sceneflow=False, static=True):
         """
         NeRF
         """
@@ -83,6 +85,8 @@ class Renderer(nn.Module):
         self.in_ch_pts = input_ch
         self.in_ch_views = input_ch_views
         self.in_ch_feat = input_ch_feat
+        self.predict_sceneflow = sceneflow
+        self.static = static
 
         # Points encoding layers
         self.pts_linears = nn.ModuleList()
@@ -106,6 +110,15 @@ class Renderer(nn.Module):
             self.rgb_linear = nn.Linear(W//2, 3) # RGB
         else:
             self.output_linear = nn.Linear(W, output_ch) # RGBA (output_ch = 4)
+
+        if self.predict_sceneflow:
+            if self.static:
+                # Static NeRF
+                self.w_linear = nn.Linear(W, 1) # Occlusion weights (blending)
+            else:
+                # Dynamic NeRF
+                self.sf_linear = nn.Linear(W, 6) # Scene Flow
+                self.prob_linear = nn.Linear(W, 2) # Occlusion weights (confidence)
 
         # He initialisation - from a normal distribution
         self.pts_linears.apply(weights_init)
@@ -157,6 +170,15 @@ class Renderer(nn.Module):
             if i in self.skips:
                 pts = torch.cat([input_pts, pts], -1)
 
+        if self.predict_sceneflow:
+            if self.static:
+                # Static NeRF
+                v = F.sigmoid(self.w_linear(pts))
+            else:
+                # Dynamic NeRF
+                sf = F.tanh(self.sf_linear(pts))
+                prob = F.sigmoid(self.prob_linear(pts))
+
         if self.use_viewdirs:
             # Alpha depends only on 3D points
             alpha = torch.relu(self.alpha_linear(pts))
@@ -175,6 +197,14 @@ class Renderer(nn.Module):
             outputs = torch.cat([rgb, alpha], -1)
         else:
             outputs = self.output_linear(pts) # RGBA
+
+        if self.predict_sceneflow:
+            if self.static:
+                # Static NeRF
+                outputs = torch.cat([outputs, v], -1)
+            else:
+                # Dynamic NeRF
+                outputs = torch.cat([outputs, sf, prob], dim=-1)
 
         logging.info("outputs "+str(outputs.shape))
         return outputs
@@ -278,7 +308,8 @@ class Renderer_linear(nn.Module):
         return outputs
 
 class MVSNeRF(nn.Module):
-    def __init__(self, D=8, W=256, input_ch_pts=3, output_ch=4, input_ch_views=3, input_ch_feat=8, skips=[4], net_type='v2'):
+    def __init__(self, D=8, W=256, input_ch_pts=3, output_ch=4, input_ch_views=3,
+                 input_ch_feat=8, skips=[4], net_type='v2', sceneflow=False, static=True):
         """
         Wrapper around NeRF to select correct network type (either linear or not)
         """
@@ -294,7 +325,8 @@ class MVSNeRF(nn.Module):
             # L_n = ReLU(FC(L_{n-1}) * neural_features)
             self.nerf = Renderer(D=D, W=W,input_ch_feat=input_ch_feat,
                         input_ch=input_ch_pts, output_ch=output_ch, skips=skips,
-                        input_ch_views=input_ch_views, use_viewdirs=True)
+                        input_ch_views=input_ch_views, use_viewdirs=True,
+                        sceneflow=sceneflow, static=static)
         elif net_type == 'v2':
             # NeRF fine
             # L_n = ReLU(FC(L_{n-1}) + neural_features)
@@ -383,6 +415,85 @@ class MVSNeRF_G(nn.Module):
         depth_pred = depth_pred.unsqueeze(-1)
         logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape) \
             +", "+str(depth_pred.shape)+","+str(rays_depth_gt.shape))
+
+        return rgb, target_s, depth_pred, rays_depth_gt, weights, t_vals
+
+class DyMVSNeRF_G(nn.Module):
+    def __init__(self, args, nerf_dynamic, nerf_static, encoding, embedding_pts, embedding_dir):
+        """
+        Generator using MVSNeRF
+        """
+        super(MVSNeRF_G, self).__init__()
+
+        # Networks
+        self.nerf_dynamic = nerf_dynamic
+        self.nerf_static = nerf_static
+        self.encoding_net = encoding
+        self.embedding_pts = embedding_pts
+        self.embedding_dir = embedding_dir
+
+        # Parameters
+        self.N_rays = args.batch_size
+        self.N_samples = args.N_samples
+        self.args = args
+
+    def unpreprocess(self, data, shape=(1,1,3,1,1)):
+        # Unnormalise images for visualisation
+        # Using ImageNet mean and std
+        # shapre == N V C H W
+        device = data.device
+        mean = torch.tensor([-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.225]).view(*shape).to(device)
+        std = torch.tensor([1 / 0.229, 1 / 0.224, 1 / 0.225]).view(*shape).to(device)
+
+        return (data - mean) / std
+
+    def forward(self, x, step=0, time_codes=None):
+        if time_codes is not None:
+            print("generator has time codes", time_codes.shape)
+
+        imgs = x['images']
+        proj_mats = x['proj_mats']
+        near_fars = x['near_fars']
+        w2cs = x['w2cs']
+        c2ws = x['c2ws']
+        intrinsics = x['intrinsics']
+        depths = x['depths_h']
+
+        # Neural Encoding Volume generation
+        # imgs -> cost vol -> Enc vol (volume_feature)
+        volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
+                                                                   proj_mats[:, :3],
+                                                                   near_fars[0,0],
+                                                                   pad=self.args.pad,
+                                                                   vis_test=self.args.vis_cnn,
+                                                                   test_dir=Path(self.args.save_test))
+        imgs = self.unpreprocess(imgs) # unnormalise for visualisation
+
+        # Ray generation from images and camera positions
+        # Should this be in decode? TODO
+        rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals = \
+            build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
+                       N_rays=self.N_rays, pad=self.args.pad,
+                       patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
+                       step=step, variable_patches=(self.args.gan_type=='graf'))
+
+        # Render colours along rays from volume feature and images
+        rgb, feats, weights, depth_pred, alpha = rendering(self.args, x,
+                                                           rays_pts, rays_NDC,
+                                                           depth_candidates,
+                                                           rays_dir,
+                                                           volume_feature,
+                                                           imgs[:, :-1],
+                                                           img_feat=None,
+                                                           network_fn=self.nerf,
+                                                           embedding_pts=self.embedding_pts,
+                                                           embedding_dir=self.embedding_dir,
+                                                           time_codes=time_codes,
+                                                           white_bkgd=self.args.white_bkgd)
+
+        depth_pred = depth_pred.unsqueeze(-1)
+        logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape)+", " \
+            +str(depth_pred.shape)+","+str(rays_depth_gt.shape))
 
         return rgb, target_s, depth_pred, rays_depth_gt, weights, t_vals
 
