@@ -949,7 +949,10 @@ class MVSNet(nn.Module):
         in_masks = torch.ones((B, V, D, H + pad * 2, W + pad * 2), device=volume_sum.device)
         for i, (src_img, src_feat, proj_mat) in enumerate(zip(imgs[1:], src_feats, proj_mats)):
             warped_volume, grid = homo_warp(src_feat, proj_mat, depth_values, pad=pad)
-            img_feat[:, (i + 1) * 3:(i + 2) * 3], _ = homo_warp(src_img, proj_mat, depth_values, src_grid=grid, pad=pad)
+            img_warped, _ = homo_warp(src_img, proj_mat, depth_values, src_grid=grid, pad=pad)
+            img_feat[:, (i + 1) * 3:(i + 2) * 3] = img_warped
+            if False:
+                torchvision.utils.save_image(img_warped.squeeze(), f"vis_sceneflow_lke/img_warped_{i}.png")
 
             grid = grid.view(B, 1, D, H + pad * 2, W + pad * 2, 2)
             in_mask = ((grid > -1.0) * (grid < 1.0))
