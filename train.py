@@ -309,6 +309,233 @@ class MVSNeRFSystem(LightningModule):
 
         return self.generator(data_mvs, self.global_step, time_codes=time_code)
 
+    def train_sf_step(self, batch, results):
+        """Compute all losses for the Scene Flow model"""
+
+        # Ground truth
+        rgb_gt = results['target_s']
+        depth_gt = results['depth_gt']
+        # Camera parameters
+        N, V, C, H, W = batch['images'].shape
+        focal = batch['intrinsics'][..., 0, 0].item() # focal point
+        w2cs = batch['w2cs'] # Reference world-to-camera matrix
+        fnb_w2cs = batch['fnb_w2cs'] # First neighbours w2c matrix
+        # Time
+        frame_t = batch['time'] # Reference frame time
+        total_frames = batch['total_frames'] # Total number of frames in scene
+        chain_bwd = results['chain_bwd'] # Bool - True: chain (frame_t - 2), False: chain (frame_t + 2)
+        # RGB maps
+        rgb_map_ref = results['rgb_map_ref'] # Blended RGB map (dynamic + static)
+        rgb_map_ref_dy = results['rgb_map_ref_dy'] # Dynamic-only RGB map at current time frame_t
+        rgb_map_post_dy = results['rgb_map_post_dy'] # Dynamic-only RGB map at time (frame_t + 1)
+        rgb_map_prev_dy = results['rgb_map_prev_dy'] # Dynamic-only RGB map at time (frame_t - 1)
+        rgb_map_pp_dy = results['rgb_map_pp_dy'] if self.hparams.with_chain_loss else None # Dynamic-only RGB map at time (frame_t - 2) or (frame_t + 2)
+        prob_map_post = results['prob_map_post'] # Confidence of the RGB map at time (frame_t + 1)
+        prob_map_prev = results['prob_map_prev'] # Confidence of the RGB map at time (frame_t - 1)
+        # Scene flow
+        raw_sf_ref2post = results['raw_sf_ref2post'] # scene flow: frame_t -> (frame_t + 1)
+        raw_sf_post2ref = results['raw_sf_post2ref'] # scene flow: (frame_t + 1) -> frame_t
+        raw_sf_ref2prev = results['raw_sf_ref2prev'] # scene flow: frame_t -> (frame_t - 1)
+        raw_sf_prev2ref = results['raw_sf_prev2ref'] # scene flow: (frame_t - 1) -> frame_t
+        # Optical flow - ground truth
+        rays_flow_fwd_gt = results['rays_flow_fwd_gt']
+        rays_flow_bwd_gt = results['rays_flow_bwd_gt']
+        rays_mask_fwd_gt = results['rays_mask_fwd_gt']
+        rays_mask_bwd_gt = results['rays_mask_bwd_gt']
+        # Alpha-compositing weights
+        weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
+        weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
+        # Blending weights - estimated by static NeRF
+        raw_blend_w = results['raw_blend_w']
+        # Raw points - as fed into NeRF
+        raw_pts_ref = results['raw_pts_ref'] # Reference time frame_t
+        raw_pts_post = results['raw_pts_post'] # (frame_t + 1)
+        raw_pts_prev = results['raw_pts_prev'] # (frame_t - 1)
+        raw_pts_pp = results['raw_pts_pp'] # (frame_t - 2) or (frame_t + 2)
+        # Depth map
+        depth_map_ref_dy = results['depth_map_ref_dy']
+
+        ##########################################
+        # Temporal photometric consistency - l_pho
+        # Dynamic-only rendering loss
+        if self.global_step <= self.decay_iteration * 1000:
+            # Initialisation
+            pho_loss = self.loss(rgb_map_ref_dy, rgb_gt)
+            pho_loss += mse_masked(rgb_map_post_dy,
+                                   rgb_gt,
+                                   prob_map_post.unsqueeze(-1))
+            pho_loss += mse_masked(rgb_map_prev_dy,
+                                   rgb_gt,
+                                   prob_map_prev.unsqueeze(-1))
+        else:
+            weights_map_dd = weights_map_dd.unsqueeze(-1).detach()
+            pho_loss = mse_masked(rgb_map_ref_dy,
+                                  rgb_gt,
+                                  weights_map_dd)
+            pho_loss += mse_masked(rgb_map_post_dy,
+                                   rgb_gt,
+                                   prob_map_post.unsqueeze(-1) * weights_map_dd)
+            pho_loss += mse_masked(rgb_map_prev_dy,
+                                   rgb_gt,
+                                   prob_map_prev.unsqueeze(-1) * weights_map_dd)
+        if self.hparams.with_chain_loss:
+            pho_loss += mse_masked(rgb_map_pp_dy,
+                                   rgb_gt,
+                                   weights_map_dd.unsqueeze(-1))
+        self.log('pho_loss', pho_loss)
+        ##########################################
+
+
+        ########################
+        # Combined loss - l_cb #
+        ########################
+        # Blended image (dy + static) rendering loss
+        combined_loss = self.loss(rgb_map_ref, rgb_gt)
+        self.log('combined_loss', combined_loss)
+        ########################
+
+
+        #######################################
+        # Cycle loss - flow cycle consistency #
+        #######################################
+        # The predicted forward scene flow at time t
+        # is consistent with the backward scene flow at time t+1
+        weight_post = 1. - results['raw_prob_ref2post'] # Disocclusion weights
+        weight_prev = 1. - results['raw_prob_ref2prev'] # Disocclusion weights
+        sf_cycle_loss = mse_masked(raw_sf_ref2post,
+                                  -raw_sf_post2ref,
+                                   weight_post.unsqueeze(-1))
+        sf_cycle_loss += mse_masked(raw_sf_ref2prev,
+                                   -raw_sf_prev2ref,
+                                    weight_prev.unsqueeze(-1))
+        self.log('sf_cycle_loss', self.hparams.lambda_cyc * sf_cycle_loss)
+        #######################################
+
+        ################################
+        ### SCENEFLOW REGULARISATION ###
+        ################################
+
+        ##############################
+        # Scene flow minimal - l_min #
+        ##############################
+        # Encourage scene flow to be minimal in most of 3D space
+        render_sf_ref2prev = torch.sum(weights_ref_dy.unsqueeze(-1) * raw_sf_ref2prev, -1)
+        render_sf_ref2post = torch.sum(weights_ref_dy.unsqueeze(-1) * raw_sf_ref2post, -1)
+        sf_min_loss = torch.mean(torch.abs(render_sf_ref2prev)) + torch.mean(torch.abs(render_sf_ref2post))
+        self.log('sf_min_loss', self.hparams.lambda_sf_reg * sf_min_loss)
+        ###############################
+
+        ########################################
+        # Scene flow spatial smoothness - l_sp #
+        ########################################
+        # Scene flow spatial smoothness minimizes the weighted l_1 difference
+        # between scenes flows sampled at neighboring 3D position along each ray.
+        sf_sp_loss = compute_sf_smooth_loss(raw_pts_ref,
+                                            raw_pts_post,
+                                            H, W, focal)
+        sf_sp_loss += compute_sf_smooth_loss(raw_pts_ref,
+                                             raw_pts_prev,
+                                             H, W, focal)
+        self.log('sf_sm_loss', self.hparams.lambda_sf_smooth * sf_sp_loss)
+
+        ###########################################
+        # Scene flow temporal smoothness - l_temp #
+        ###########################################
+        # Inspired by Vo et al., encourages 3D point trajectories to be
+        # piece-wise linear with least kinetic energy prior.
+        # This is equivalent to minimizing sum of forward scene flow
+        # and backward scene flow from each sampled 3D point along the ray
+        sf_st_loss = compute_sf_lke_loss(raw_pts_ref,
+                                         raw_pts_post,
+                                         raw_pts_prev,
+                                         H, W, focal)
+        if chain_bwd:
+            # (frame_t - 2)
+            sf_st_loss += compute_sf_lke_loss(raw_pts_prev,
+                                              raw_pts_ref,
+                                              raw_pts_pp,
+                                              H, W, focal)
+        else:
+            # (frame_t + 2)
+            sf_st_loss += compute_sf_lke_loss(raw_pts_post,
+                                              raw_pts_pp,
+                                              raw_pts_ref,
+                                              H, W, focal)
+        self.log('sf_st_loss', self.hparams.lambda_sf_smooth * sf_st_loss)
+
+
+        ################
+        # Entropy loss #
+        ################
+        # This loss encourages blending weight to be either 0 or 1, which can help
+        # to reduce the ghosting caused by learned semi-transparent blending weight.
+        # NOTE - this was added to NSFF after paper
+        entropy_loss = torch.mean(-raw_blend_w * torch.log(raw_blend_w + 1e-8))
+        self.log('entropy_loss', self.hparams.lambda_blending_reg * entropy_loss)
+        ################
+
+
+        ### Data-driven priors ###
+        # For initialisation - decay to 0 during training
+        divisor = self.global_step // (self.decay_iteration * 1000)
+        decay_rate = 10
+        w_of = self.hparams.lambda_optical_flow / (decay_rate ** divisor)
+        w_depth = self.hparams.lambda_sf_depth / (decay_rate ** divisor)
+
+        #########################
+        # Geometric consistency #
+        #########################
+        # Build accurate correspondence association between adjacent frames,
+        # minimising reprojection error of scene flow displaced 3D points
+        # with respect the derived 2D optical flow
+        # TODO - this needs to be the matrices for post and prev poses!!
+        render_of_fwd = projection_from_ndc(fnb_w2cs[:,1], H, W, focal,
+                                            weights_ref_dy,
+                                            raw_pts_post)
+        render_of_bwd = projection_from_ndc(fnb_w2cs[:,0], H, W, focal,
+                                            weights_ref_dy,
+                                            raw_pts_prev)
+        if frame_t == 0:
+            # First frame only has forward flow
+            flow_loss = mae_masked(render_of_fwd,
+                                   rays_flow_fwd_gt,
+                                   rays_mask_fwd_gt.unsqueeze(-1))
+        elif frame_t == total_frames - 1:
+            # Last frame only has backward flow
+            flow_loss = mae_masked(render_of_bwd,
+                                   rays_flow_bwd_gt,
+                                   rays_mask_bwd_gt.unsqueeze(-1))
+        else:
+            flow_loss = mae_masked(render_of_fwd,
+                                   rays_flow_fwd_gt,
+                                   rays_mask_fwd_gt.unsqueeze(-1))
+            flow_loss += mae_masked(render_of_bwd,
+                                    rays_flow_bwd_gt,
+                                    rays_mask_bwd_gt.unsqueeze(-1))
+        self.log('flow_loss', w_of * flow_loss)
+        #########################
+
+        ###########################
+        # Single-view depth prior #
+        ###########################
+        # Encourages the expected termination depth computed along each ray
+        # to be close to the depth predicted from a pre-trained single view network.
+        sf_depth_loss = compute_depth_loss(depth_map_ref_dy, -depth_gt) # NOTE - I think this is disparity, not depth
+        self.log('sf_depth_loss', w_depth * sf_depth_loss)
+        ###########################
+
+        # L = l_pho + l_cb + l_cyc + l_reg (min+sp+temp+entropy) + l_data (flow+depth)
+        sceneflow_loss = pho_loss + combined_loss \
+                       + self.hparams.lambda_cyc * sf_cycle_loss \
+                       + self.hparams.lambda_sf_reg * sf_min_loss \
+                       + self.hparams.lambda_sf_smooth * sf_sp_loss \
+                       + self.hparams.lambda_sf_smooth * sf_st_loss \
+                       + self.hparams.lambda_blending_reg * entropy_loss \
+                       + w_of * flow_loss \
+                       + w_depth * sf_depth_loss
+
+        return sceneflow_loss
+
     def training_step(self, batch, batch_idx, optimizer_idx=None):
         logging.info("TRAINING STEP")
         results = self(batch)
@@ -358,223 +585,8 @@ class MVSNeRFSystem(LightningModule):
         # Scene Flow losses
         sceneflow_loss = 0
         if self.hparams.train_sceneflow:
-            # Camera parameters
-            N, V, C, H, W = batch['images'].shape
-            focal = batch['intrinsics'][..., 0, 0].item() # focal point
-            w2cs = batch['w2cs'] # Reference world-to-camera matrix
-            fnb_w2cs = batch['fnb_w2cs'] # First neighbours w2c matrix
-            # Time
-            frame_t = batch['time'] # Reference frame time
-            total_frames = batch['total_frames'] # Total number of frames in scene
-            chain_bwd = results['chain_bwd'] # Bool - True: chain (frame_t - 2), False: chain (frame_t + 2)
-            # RGB maps
-            rgb_map_ref = results['rgb_map_ref'] # Blended RGB map (dynamic + static)
-            rgb_map_ref_dy = results['rgb_map_ref_dy'] # Dynamic-only RGB map at current time frame_t
-            rgb_map_post_dy = results['rgb_map_post_dy'] # Dynamic-only RGB map at time (frame_t + 1)
-            rgb_map_prev_dy = results['rgb_map_prev_dy'] # Dynamic-only RGB map at time (frame_t - 1)
-            rgb_map_pp_dy = results['rgb_map_pp_dy'] if self.hparams.with_chain_loss else None # Dynamic-only RGB map at time (frame_t - 2) or (frame_t + 2)
-            prob_map_post = results['prob_map_post'] # Confidence of the RGB map at time (frame_t + 1)
-            prob_map_prev = results['prob_map_prev'] # Confidence of the RGB map at time (frame_t - 1)
-            # Scene flow
-            raw_sf_ref2post = results['raw_sf_ref2post'] # scene flow: frame_t -> (frame_t + 1)
-            raw_sf_post2ref = results['raw_sf_post2ref'] # scene flow: (frame_t + 1) -> frame_t
-            raw_sf_ref2prev = results['raw_sf_ref2prev'] # scene flow: frame_t -> (frame_t - 1)
-            raw_sf_prev2ref = results['raw_sf_prev2ref'] # scene flow: (frame_t - 1) -> frame_t
-            # Optical flow - ground truth
-            rays_flow_fwd_gt = results['rays_flow_fwd_gt']
-            rays_flow_bwd_gt = results['rays_flow_bwd_gt']
-            rays_mask_fwd_gt = results['rays_mask_fwd_gt']
-            rays_mask_bwd_gt = results['rays_mask_bwd_gt']
-            # Alpha-compositing weights
-            weights_map_dd = results['weights_map_dd'] # Dynamic part of the blended alpha-compositing weights
-            weights_ref_dy = results['weights_ref_dy'] # Dynamic-only alpha-compositing weights
-            # Blending weights - estimated by static NeRF
-            raw_blend_w = results['raw_blend_w']
-            # Raw points - as fed into NeRF
-            raw_pts_ref = results['raw_pts_ref'] # Reference time frame_t
-            raw_pts_post = results['raw_pts_post'] # (frame_t + 1)
-            raw_pts_prev = results['raw_pts_prev'] # (frame_t - 1)
-            raw_pts_pp = results['raw_pts_pp'] # (frame_t - 2) or (frame_t + 2)
-            # Depth map
-            depth_map_ref_dy = results['depth_map_ref_dy']
-
-            ##########################################
-            # Temporal photometric consistency - l_pho
-            # Dynamic-only rendering loss
-            if self.global_step <= self.decay_iteration * 1000:
-                # Initialisation
-                pho_loss = self.loss(rgb_map_ref_dy, rgb_gt)
-                pho_loss += mse_masked(rgb_map_post_dy,
-                                       rgb_gt,
-                                       prob_map_post.unsqueeze(-1))
-                pho_loss += mse_masked(rgb_map_prev_dy,
-                                       rgb_gt,
-                                       prob_map_prev.unsqueeze(-1))
-            else:
-                weights_map_dd = weights_map_dd.unsqueeze(-1).detach()
-                pho_loss = mse_masked(rgb_map_ref_dy,
-                                      rgb_gt,
-                                      weights_map_dd)
-                pho_loss += mse_masked(rgb_map_post_dy,
-                                       rgb_gt,
-                                       prob_map_post.unsqueeze(-1) * weights_map_dd)
-                pho_loss += mse_masked(rgb_map_prev_dy,
-                                       rgb_gt,
-                                       prob_map_prev.unsqueeze(-1) * weights_map_dd)
-            if self.hparams.with_chain_loss:
-                pho_loss += mse_masked(rgb_map_pp_dy,
-                                       rgb_gt,
-                                       weights_map_dd.unsqueeze(-1))
-            self.log('pho_loss', pho_loss)
-            ##########################################
-
-
-            ########################
-            # Combined loss - l_cb #
-            ########################
-            # Blended image (dy + static) rendering loss
-            combined_loss = self.loss(rgb_map_ref, rgb_gt)
-            self.log('combined_loss', combined_loss)
-            ########################
-
-
-            #######################################
-            # Cycle loss - flow cycle consistency #
-            #######################################
-            # The predicted forward scene flow at time t
-            # is consistent with the backward scene flow at time t+1
-            weight_post = 1. - results['raw_prob_ref2post'] # Disocclusion weights
-            weight_prev = 1. - results['raw_prob_ref2prev'] # Disocclusion weights
-            sf_cycle_loss = mse_masked(raw_sf_ref2post,
-                                      -raw_sf_post2ref,
-                                       weight_post.unsqueeze(-1))
-            sf_cycle_loss += mse_masked(raw_sf_ref2prev,
-                                       -raw_sf_prev2ref,
-                                        weight_prev.unsqueeze(-1))
-            self.log('sf_cycle_loss', self.hparams.lambda_cyc * sf_cycle_loss)
-            #######################################
-
-            ################################
-            ### SCENEFLOW REGULARISATION ###
-            ################################
-
-            ##############################
-            # Scene flow minimal - l_min #
-            ##############################
-            # Encourage scene flow to be minimal in most of 3D space
-            render_sf_ref2prev = torch.sum(weights_ref_dy.unsqueeze(-1) * raw_sf_ref2prev, -1)
-            render_sf_ref2post = torch.sum(weights_ref_dy.unsqueeze(-1) * raw_sf_ref2post, -1)
-            sf_min_loss = torch.mean(torch.abs(render_sf_ref2prev)) + torch.mean(torch.abs(render_sf_ref2post))
-            self.log('sf_min_loss', self.hparams.lambda_sf_reg * sf_min_loss)
-            ###############################
-
-            ########################################
-            # Scene flow spatial smoothness - l_sp #
-            ########################################
-            # Scene flow spatial smoothness minimizes the weighted l_1 difference
-            # between scenes flows sampled at neighboring 3D position along each ray.
-            sf_sp_loss = compute_sf_smooth_loss(raw_pts_ref,
-                                                raw_pts_post,
-                                                H, W, focal)
-            sf_sp_loss += compute_sf_smooth_loss(raw_pts_ref,
-                                                 raw_pts_prev,
-                                                 H, W, focal)
-            self.log('sf_sm_loss', self.hparams.lambda_sf_smooth * sf_sp_loss)
-
-            ###########################################
-            # Scene flow temporal smoothness - l_temp #
-            ###########################################
-            # Inspired by Vo et al., encourages 3D point trajectories to be
-            # piece-wise linear with least kinetic energy prior.
-            # This is equivalent to minimizing sum of forward scene flow
-            # and backward scene flow from each sampled 3D point along the ray
-            sf_st_loss = compute_sf_lke_loss(raw_pts_ref,
-                                             raw_pts_post,
-                                             raw_pts_prev,
-                                             H, W, focal)
-            if chain_bwd:
-                # (frame_t - 2)
-                sf_st_loss += compute_sf_lke_loss(raw_pts_prev,
-                                                  raw_pts_ref,
-                                                  raw_pts_pp,
-                                                  H, W, focal)
-            else:
-                # (frame_t + 2)
-                sf_st_loss += compute_sf_lke_loss(raw_pts_post,
-                                                  raw_pts_pp,
-                                                  raw_pts_ref,
-                                                  H, W, focal)
-            self.log('sf_st_loss', self.hparams.lambda_sf_smooth * sf_st_loss)
-
-
-            ################
-            # Entropy loss #
-            ################
-            # This loss encourages blending weight to be either 0 or 1, which can help
-            # to reduce the ghosting caused by learned semi-transparent blending weight.
-            # NOTE - this was added to NSFF after paper
-            entropy_loss = torch.mean(-raw_blend_w * torch.log(raw_blend_w + 1e-8))
-            self.log('entropy_loss', self.hparams.lambda_blending_reg * entropy_loss)
-            ################
-
-
-            ### Data-driven priors ###
-            # For initialisation - decay to 0 during training
-            divisor = self.global_step // (self.decay_iteration * 1000)
-            decay_rate = 10
-            w_of = self.hparams.lambda_optical_flow / (decay_rate ** divisor)
-            w_depth = self.hparams.lambda_sf_depth / (decay_rate ** divisor)
-
-            #########################
-            # Geometric consistency #
-            #########################
-            # Build accurate correspondence association between adjacent frames,
-            # minimising reprojection error of scene flow displaced 3D points
-            # with respect the derived 2D optical flow
-            # TODO - this needs to be the matrices for post and prev poses!!
-            render_of_fwd = projection_from_ndc(fnb_w2cs[:,1], H, W, focal,
-                                                weights_ref_dy,
-                                                raw_pts_post)
-            render_of_bwd = projection_from_ndc(fnb_w2cs[:,0], H, W, focal,
-                                                weights_ref_dy,
-                                                raw_pts_prev)
-            if frame_t == 0:
-                # First frame only has forward flow
-                flow_loss = mae_masked(render_of_fwd,
-                                       rays_flow_fwd_gt,
-                                       rays_mask_fwd_gt.unsqueeze(-1))
-            elif frame_t == total_frames - 1:
-                # Last frame only has backward flow
-                flow_loss = mae_masked(render_of_bwd,
-                                       rays_flow_bwd_gt,
-                                       rays_mask_bwd_gt.unsqueeze(-1))
-            else:
-                flow_loss = mae_masked(render_of_fwd,
-                                       rays_flow_fwd_gt,
-                                       rays_mask_fwd_gt.unsqueeze(-1))
-                flow_loss += mae_masked(render_of_bwd,
-                                        rays_flow_bwd_gt,
-                                        rays_mask_bwd_gt.unsqueeze(-1))
-            self.log('flow_loss', w_of * flow_loss)
-            #########################
-
-            ###########################
-            # Single-view depth prior #
-            ###########################
-            # Encourages the expected termination depth computed along each ray
-            # to be close to the depth predicted from a pre-trained single view network.
-            sf_depth_loss = compute_depth_loss(depth_map_ref_dy, -depth_gt) # NOTE - I think this is disparity, not depth
-            self.log('sf_depth_loss', w_depth * sf_depth_loss)
-            ###########################
-
-            sceneflow_loss = pho_loss + combined_loss \
-                           + self.hparams.lambda_cyc * sf_cycle_loss \
-                           + self.hparams.lambda_sf_reg * sf_min_loss \
-                           + self.hparams.lambda_sf_smooth * sf_sp_loss \
-                           + self.hparams.lambda_sf_smooth * sf_st_loss \
-                           + self.hparams.lambda_blending_reg * entropy_loss \
-                           + w_of * flow_loss \
-                           + w_depth * sf_depth_loss
+            sceneflow_loss = self.train_sf_step(batch, results)
+            self.log('sceneflow_loss', sceneflow_loss)
 
         if self.hparams.gan_type != None:
             # Adversarial training
