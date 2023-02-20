@@ -699,6 +699,79 @@ class MVSNeRFSystem(LightningModule):
         return {'loss': total_loss}
 
     def validation_step(self, batch, batch_nb):
+        if self.hparams.train_sceneflow:
+            log = self.validation_step_sceneflow(batch, batch_nb)
+        else:
+            log = self.validation_step_svs(batch, batch_nb)
+        return log
+
+    def validation_step_sceneflow(self, batch, batch_nb):
+        logging.info("VALIDATION STEP")
+
+        with torch.no_grad():
+            # Validation step
+            imgs, rgbs_blend, depths_blend, \
+                rgbs_rig, depths_rig, \
+                rgbs_dy, depths_dy, \
+                weights_dd = self.generator.forward_val(batch)
+
+            # Validation processes only one image at a time, so batch N==1
+            imgs = imgs[0] # [V,3,H,W]
+            tgt_img = imgs[-1].unsqueeze(0) # [1,3,H,W]
+            V, C, H, W = imgs.shape
+
+            rgb_blend = torch.clamp(torch.cat(rgbs_blend).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+            rgb_rig = torch.clamp(torch.cat(rgbs_rig).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+            rgb_dy = torch.clamp(torch.cat(rgbs_dy).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+            depth_blend = torch.cat(depths_blend).reshape(H, W)
+            depth_rig = torch.cat(depths_rig).reshape(H, W)
+            depth_dy = torch.cat(depths_dy).reshape(H, W)
+            weights_dd = torch.cat(weights_dd).reshape(H, W)
+
+            # loss
+            log = {'val_loss': self.loss(rgb_blend, tgt_img)}
+            # metrics
+            psnr_ = psnr(rgb_blend, tgt_img, 1)
+            ssim_ = ssim(rgb_blend, tgt_img, 5).mean()
+            lpips_ = self.lpips(rgb_blend, tgt_img)
+            log['val_psnr'] = psnr_
+            log['val_ssim'] = ssim_
+            log['val_lpips'] = lpips_
+            logging.info("Validation metrics: PSNR "+str(psnr_)+", SSIM "+str(ssim_)+", LPIPS "+str(lpips_))
+
+            # RGB visualisation
+            self.logger.log_image('val/rgb_map_blend', images=[rgb_blend], step=self.global_step)
+            self.logger.log_image('val/rgb_map_rigid', images=[rgb_rig], step=self.global_step)
+            self.logger.log_image('val/rgb_map_dy', images=[rgb_dy], step=self.global_step)
+
+            # Depth visualisation
+            minmax = [2.0, 6.0]
+            depth_vis_b, _ = visualize_depth(depth_blend, minmax)
+            depth_vis_r, _ = visualize_depth(depth_rig, minmax)
+            depth_vis_d, _ = visualize_depth(depth_dy, minmax)
+            self.logger.log_image('val/depth_map_blend', images=[depth_vis_b[None]], step=self.global_step)
+            self.logger.log_image('val/depth_map_rigid', images=[depth_vis_r[None]], step=self.global_step)
+            self.logger.log_image('val/depth_map_dy', images=[depth_vis_d[None]], step=self.global_step)
+
+            # Visualise compositing weights for dynamic side of network
+            self.logger.log_image('val/weights_map_dd', images=[weights_dd[None]], step=self.global_step)
+
+            # Comparative RGB ground truth, estimated, absolute error
+            img_err_abs_b = (rgb_blend - tgt_img).abs()
+            img_vis = torch.cat((imgs.cpu(), rgb_blend.cpu(), img_err_abs_b.cpu()*5), dim=0) # [V 3 H W]
+            self.logger.log_image('val/rgb_pred_err', images=[img_vis], step=self.global_step) # only show one sample from the batch
+
+            # Save summary visualisation locally
+            img_vis = torch.cat((img_vis, depth_vis_b[None]), dim=0)
+            img_vis = img_vis.permute(2,0,3,1).reshape(img_vis.shape[2],-1,3).numpy()
+            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'val_images'
+            save_dir_vis.mkdir(parents=True, exist_ok=True)
+            imageio.imwrite(save_dir_vis / f'{self.global_step:08d}_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
+            self.idx += 1
+
+        return log
+
+    def validation_step_svs(self, batch, batch_nb):
         logging.info("VALIDATION STEP")
         # TODO - Old model code. Should refactor to match training step
 
@@ -707,7 +780,6 @@ class MVSNeRFSystem(LightningModule):
         depths = batch['depths_h']
         time_code = self.time_codes[batch['keyframe_id']].to(self.device) if self.time_codes is not None else None
 
-        self.encoding_net.train()
         N, V, C, H, W = imgs.shape
         logging.info("image batch: imgs "+str(imgs.shape))
 
@@ -718,13 +790,15 @@ class MVSNeRFSystem(LightningModule):
             self.hparams.img_downscale = torch.rand((1,)) * 0.75 + 0.25  # for super resolution
             w2cs = batch['w2cs']
             c2ws, intrinsics = batch['c2ws'], batch['intrinsics']
-
-            # Encoding volume
-            volume_feature, img_feat, _ = self.encoding_net(imgs[:, :3],
-                                                      proj_mats[:, :3],
-                                                      near_fars[0,0],
-                                                      pad=self.hparams.pad)
-            logging.info("volume_feature "+str(volume_feature.shape))
+            volume_feature = None
+            if self.encoding_net is not None:
+                # Encoding volume
+                self.encoding_net.train()
+                volume_feature, img_feat, _ = self.encoding_net(imgs[:, :3],
+                                                                proj_mats[:, :3],
+                                                                near_fars[0,0],
+                                                                pad=self.hparams.pad)
+                logging.info("volume_feature "+str(volume_feature.shape))
 
             imgs = self.unpreprocess(imgs)
             rgbs, depth_preds = [],[]
@@ -736,20 +810,20 @@ class MVSNeRFSystem(LightningModule):
                                pad=self.hparams.pad, chunk=self.hparams.chunk,
                                idx=chunk_idx, val=True, isRandom=False)
 
-                rgb, disp, acc, depth_pred, density_ray = rendering(self.hparams, batch,
-                                                                    rays_pts, rays_NDC,
-                                                                    depth_candidates,
-                                                                    rays_dir,
-                                                                    volume_feature,
-                                                                    imgs[:, :-1],
-                                                                    img_feat=None,
-                                                                    network_fn=self.nerf_coarse,
-                                                                    embedding_pts=self.embedding_xyz,
-                                                                    embedding_dir=self.embedding_dir,
-                                                                    time_codes=time_code,
-                                                                    white_bkgd=self.hparams.white_bkgd)
-                rgbs.append(rgb.squeeze(0));depth_preds.append(depth_pred.squeeze(0))
-                logging.info("render outs rgb depth "+str(rgb.shape)+", "+str(depth_pred.shape))
+                ret =  rendering(self.hparams, batch,
+                                rays_pts, rays_NDC,
+                                depth_candidates,
+                                rays_dir,
+                                volume_feature,
+                                imgs[:, :-1],
+                                img_feat=None,
+                                network_fn=self.nerf_coarse,
+                                embedding_pts=self.embedding_xyz,
+                                embedding_dir=self.embedding_dir,
+                                time_codes=time_code,
+                                white_bkgd=self.hparams.white_bkgd)
+                rgbs.append(ret['rgb_map'].squeeze(0))
+                depth_preds.append(ret['depth_map'].squeeze(0))
 
             # Validation processes only one image at a time, so batch N==1
             imgs = imgs[0] # [1,V,3,H,W] -> [V,3,H,W]
@@ -771,11 +845,11 @@ class MVSNeRFSystem(LightningModule):
 
             minmax = [2.0, 6.0]
             depth_pred_r_, _ = visualize_depth(depth_r, minmax)
-            self.logger.experiment.add_images('val/depth_gt_pred_err', depth_pred_r_[None], self.global_step)
+            self.logger.log_image('val/depth_gt_pred_err', images=[depth_pred_r_[None]], step=self.global_step)
             logging.info("Depth rays? "+str(depth_r.shape)+", "+str(depth_pred_r_.shape))
 
             img_vis = torch.cat((imgs.cpu(), rgb.cpu(), img_err_abs.cpu()*5), dim=0) # [V 3 H W]
-            self.logger.experiment.add_images('val/rgb_pred_err', img_vis, self.global_step) # only show one sample from the batch
+            self.logger.log_image('val/rgb_pred_err', images=[img_vis], step=self.global_step) # only show one sample from the batch
             logging.info("img_vis "+str(img_vis.shape))
 
             img_vis = torch.cat((img_vis,depth_pred_r_[None]),dim=0)

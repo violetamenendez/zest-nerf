@@ -376,7 +376,7 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
 def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                    dists, cos_angle, raw_rgba, raw_blend_w, ref_frame_idx, num_frames,
                    chain_bwd, chain_5frames, volume_feature=None, imgs=None, img_feat=None,
-                   network_fn=None, embedding_pts=None, embedding_dir=None):
+                   network_fn=None, embedding_pts=None, embedding_dir=None, val=False):
     """Render dynamic NeRF (Neural Scene Flow Fields https://github.com/zhengqili/Neural-Scene-Flow-Fields)
 
     Input:
@@ -437,7 +437,10 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
            'rgb_map_ref_dy': rgb_map_ref_dy, # Dynamic-only RGB map
            'depth_map_ref_dy': depth_map_ref_dy, # Dynamic-only depth map
            'weights_map_dd': weights_map_dd} # Dynamic part of the blended alpha-compositing weights
-    # TODO - only in training mode?
+
+    if val:
+        return ret
+
     ret['raw_sf_ref2prev'] = raw_sf_ref2prev
     ret['raw_sf_ref2post'] = raw_sf_ref2post
     ret['raw_pts_ref'] = raw_pts_ref[..., :3]
@@ -570,7 +573,7 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
               volume_feature=None, imgs=None, img_feat=None, network_fn=None, network_fn_dy=None,
               embedding_pts=None, embedding_xyzt=None, embedding_dir=None,
               chain_bwd=False, chain_5frames=False, ref_frame_idx=None, num_frames=None,
-              time_codes=None, white_bkgd=False, scene_flow=False):
+              time_codes=None, white_bkgd=False, scene_flow=False, val=False):
     """
     rays_dir: [N, N_rays, 3] (e.g. [N,1024,3])
     """
@@ -605,7 +608,8 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                                 rays_dir, dists, cos_angle,  ret['raw_rgba'], ret['raw_blend_w'],
                                 ref_frame_idx, num_frames, chain_bwd, chain_5frames,
                                 volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
-                                network_fn=network_fn_dy, embedding_pts=embedding_xyzt, embedding_dir=embedding_dir)
+                                network_fn=network_fn_dy, embedding_pts=embedding_xyzt, embedding_dir=embedding_dir,
+                                val=val)
         ret.update(ret_dy)
 
     return ret

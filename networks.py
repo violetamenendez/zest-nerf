@@ -422,17 +422,11 @@ class MVSNeRF_G(nn.Module):
                         time_codes=time_codes,
                         white_bkgd=self.args.white_bkgd)
 
-        rgb = ret['rgb_map']
-        feats = ret['input_feat']
-        weights = ret['weights']
-        depth_pred = ret['depth_map']
-        alpha = ret['alpha']
+        ret['target_s'] = target_s
+        ret['depth_gt'] = rays_depth_gt
+        ret['t_vals'] = t_vals
 
-        depth_pred = depth_pred.unsqueeze(-1)
-        logging.info("render outs rgb targe "+str(rgb.shape)+", "+str(target_s.shape) \
-            +", "+str(depth_pred.shape)+","+str(rays_depth_gt.shape))
-
-        return rgb, target_s, depth_pred, rays_depth_gt, weights, t_vals
+        return ret
 
 class DyMVSNeRF_G(nn.Module):
     def __init__(self, args, nerf_dynamic, nerf_static, encoding, embedding_pts, embedding_xyzt, embedding_dir):
@@ -544,6 +538,95 @@ class DyMVSNeRF_G(nn.Module):
         ret['chain_bwd'] = self.chain_bwd
 
         return ret
+
+    def forward_val(self, x, time_codes=None):
+        if time_codes is not None:
+            print("generator has time codes", time_codes.shape)
+
+        imgs = x['images']
+        proj_mats = x['proj_mats']
+        near_fars = x['near_fars']
+        w2cs = x['w2cs']
+        c2ws = x['c2ws']
+        intrinsics = x['intrinsics']
+        frame_t = x['time'].item()
+        num_frames = x['total_frames'].item()
+        ref_frame_idx = frame_t/num_frames * 2. - 1.0 # normalised frame index for reference image
+
+        # Ground truth optical flow
+        flow_fwds = x['flow_fwds']
+        flow_bwds = x['flow_bwds']
+        # Ground truth motion masks
+        mask_fwds = x['mask_fwds']
+        mask_bwds = x['mask_bwds']
+        # Ground truth disparity
+        depths = x['depths']
+
+        with torch.no_grad():
+            # Neural Encoding Volume
+            volume_feature = None
+            if self.encoding_net is not None:
+                self.encoding_net.train()
+                volume_feature, _, _ = self.encoding_net(imgs[:, :3],
+                                                         proj_mats[:, :3],
+                                                         near_fars[0,0],
+                                                         pad=self.args.pad)
+            imgs = self.unpreprocess(imgs) # unnormalise for visualisation
+
+            self.args.img_downscale = torch.rand((1,)) * 0.75 + 0.25
+            N, V, C, H, W = imgs.shape
+
+            rgbs_blend, depths_blend = [],[]
+            rgbs_rig, depths_rig = [],[]
+            rgbs_dy, depths_dy = [],[]
+            weights_dd = []
+            for chunk_idx in range(H*W//self.args.chunk + int(H*W%self.args.chunk>0)):
+
+                # Build rays in chunks
+                rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals, \
+                rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt = \
+                    build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
+                                N_rays=self.N_rays, stratified=False, pad=self.args.pad,
+                                chunk=self.args.chunk, idx=chunk_idx, val=True, isRandom=False, scene_flow=True,
+                                flow_fwd=flow_fwds, flow_bwd=flow_bwds, mask_fwd=mask_fwds, mask_bwd=mask_bwds)
+
+                self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
+
+                # Render colours along rays from volume feature and images
+                ret = rendering(self.args, x,
+                                rays_pts, rays_NDC,
+                                depth_candidates,
+                                rays_dir,
+                                volume_feature,
+                                imgs[:, :-1],
+                                img_feat=None,
+                                network_fn=self.nerf_static,
+                                network_fn_dy=self.nerf_dynamic,
+                                embedding_pts=self.embedding_pts,
+                                embedding_xyzt=self.embedding_xyzt,
+                                embedding_dir=self.embedding_dir,
+                                time_codes=time_codes,
+                                white_bkgd=self.args.white_bkgd,
+                                scene_flow=True,
+                                chain_bwd=self.chain_bwd,
+                                chain_5frames=False,
+                                ref_frame_idx=ref_frame_idx,
+                                num_frames=num_frames,
+                                val=True)
+
+                rgbs_blend.append(ret['rgb_map_ref'].squeeze(0)) # blended rgb
+                depths_blend.append(ret['depth_map_ref'].squeeze(0)) # blended depth
+                rgbs_rig.append(ret['rgb_map'].squeeze(0)) # rigid rgb
+                depths_rig.append(ret['depth_map'].squeeze(0)) # rigid depth
+                rgbs_dy.append(ret['rgb_map_ref_dy'].squeeze(0)) # dynamic rgb
+                depths_dy.append(ret['depth_map_ref_dy'].squeeze(0)) # dynamic depth
+
+                weights_dd.append(ret['weights_map_dd'].squeeze(0)) # alpha-comp for dynamic weights
+
+        del rays_NDC, rays_dir, rays_pts, volume_feature
+
+        return imgs, rgbs_blend, depths_blend, rgbs_rig, depths_rig, \
+            rgbs_dy, depths_dy, weights_dd
 
 class BasicDiscriminator(nn.Module):
     def __init__(self, img_shape, gan_type = None):
