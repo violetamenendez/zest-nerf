@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 import cv2
 from PIL import Image
 from torchvision import transforms as T
+from kornia import create_meshgrid
 
 from .data_utils import get_nearest_pose_ids, center_poses
 from utils import read_pfm
@@ -260,6 +261,11 @@ class NSFFDataset(Dataset):
                     flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
                     flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
                     flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
+                # Correct flow values according to coordinates
+                uv_grid = create_meshgrid(self.img_wh[1], self.img_wh[0], normalized_coordinates=False)[0].numpy()
+                flow_fwd = flow_fwd + uv_grid
+                flow_bwd = flow_bwd + uv_grid
+
                 flow_fwds.append(flow_fwd)
                 flow_bwds.append(flow_bwd)
                 mask_fwds.append(fwd_mask)
