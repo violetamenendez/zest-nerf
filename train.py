@@ -1019,7 +1019,9 @@ def main():
 
     logger = loggers.WandbLogger(
         save_dir=hparams.save_dir,
-        name=hparams.expname
+        name=hparams.expname,
+        log_model="all",
+        offline=False
     )
 
     # Load checkpoints from given path or resume from existing
