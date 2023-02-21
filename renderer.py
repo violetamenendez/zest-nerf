@@ -85,7 +85,7 @@ def depth2dist(z_vals, cos_angle):
 
     # Multiply each distance by the norm of its corresponding direction ray
     # to convert to real world distance (accounts for non-unit directions).
-    dists = dists * cos_angle.unsqueeze(-1)
+    dists = dists * cos_angle
     return dists
 
 def raw2alpha(sigma):
@@ -255,9 +255,9 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     # using viewing direction
     if data_mvs is not None:
         w2ref = data_mvs['w2cs'][:,0,:,:]
-        angle = gen_dir_feature(w2ref, rays_dir/cos_angle.unsqueeze(-1))  # view dir feature
+        angle = gen_dir_feature(w2ref, rays_dir/cos_angle)  # view dir feature
     else:
-        angle = rays_dir/cos_angle.unsqueeze(-1) # [N, N_rays, 1]
+        angle = rays_dir/cos_angle # [N, N_rays, 1]
 
     pts = rays_ndc
 
@@ -590,7 +590,7 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
         +","+str(white_bkgd))
 
     # rays angle
-    cos_angle = torch.norm(rays_dir, dim=-1) # [N, N_rays]
+    cos_angle = torch.norm(rays_dir, dim=-1, keepdim=True) # [N, N_rays]
 
     # Distance between ray intervals
     dists = depth2dist(depth_candidates, cos_angle)
