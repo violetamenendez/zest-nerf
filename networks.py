@@ -116,10 +116,13 @@ class Renderer(nn.Module):
             if self.static:
                 # Static NeRF
                 self.w_linear = nn.Linear(W, 1) # Occlusion weights (blending)
+                # self.w_linear.apply(weights_init)
             else:
                 # Dynamic NeRF
                 self.sf_linear = nn.Linear(W, 6) # Scene Flow
                 self.prob_linear = nn.Linear(W, 2) # Occlusion weights (confidence)
+                # self.sf_linear.apply(weights_init)
+                # self.prob_linear.apply(weights_init)
 
         # He initialisation - from a normal distribution
         # self.pts_linears.apply(weights_init)
@@ -255,11 +258,11 @@ class Renderer_linear(nn.Module):
             self.output_linear = nn.Linear(W, output_ch) # RGBA (output_ch = 4)
 
         # He initialisation - from a normal distribution
-        self.pts_linears.apply(weights_init)
-        self.views_linears.apply(weights_init)
-        self.feature_linear.apply(weights_init)
-        self.alpha_linear.apply(weights_init)
-        self.rgb_linear.apply(weights_init)
+        # self.pts_linears.apply(weights_init)
+        # self.views_linears.apply(weights_init)
+        # self.feature_linear.apply(weights_init)
+        # self.alpha_linear.apply(weights_init)
+        # self.rgb_linear.apply(weights_init)
 
     def forward_alpha(self, x):
 
