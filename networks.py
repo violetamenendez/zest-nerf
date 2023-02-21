@@ -392,11 +392,13 @@ class MVSNeRF_G(nn.Module):
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
         volume_feature = None
+        pad = 0
         if self.encoding_net is not None:
+            pad = self.args.pad
             volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
                                                                        proj_mats[:, :3],
                                                                        near_fars[0,0],
-                                                                       pad=self.args.pad,
+                                                                       pad=pad,
                                                                        vis_test=self.args.vis_cnn,
                                                                        test_dir=Path(self.args.save_test))
         imgs = self.unpreprocess(imgs) # unnormalise for visualisation
@@ -404,7 +406,7 @@ class MVSNeRF_G(nn.Module):
         # Ray generation from images and camera positions
         rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals = \
             build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
-                       N_rays=self.N_rays, pad=self.args.pad,
+                       N_rays=self.N_rays, pad=pad,
                        patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
                        step=step, variable_patches=(self.args.gan_type=='graf'))
 
@@ -486,11 +488,13 @@ class DyMVSNeRF_G(nn.Module):
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
         volume_feature = None
+        pad = 0
         if self.encoding_net is not None:
+            pad = self.args.pad
             volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
                                                                        proj_mats[:, :3],
                                                                        near_fars[0,0],
-                                                                       pad=self.args.pad,
+                                                                       pad=pad,
                                                                        vis_test=self.args.vis_cnn,
                                                                        test_dir=Path(self.args.save_test))
         imgs = self.unpreprocess(imgs) # unnormalise for visualisation
@@ -500,7 +504,7 @@ class DyMVSNeRF_G(nn.Module):
         rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals, \
         rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt = \
             build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
-                          N_rays=self.N_rays, pad=self.args.pad,
+                          N_rays=self.N_rays, pad=pad,
                           patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
                           step=step, variable_patches=(self.args.gan_type=='graf'), scene_flow=True,
                           flow_fwd=flow_fwds, flow_bwd=flow_bwds, mask_fwd=mask_fwds, mask_bwd=mask_bwds)
@@ -565,12 +569,14 @@ class DyMVSNeRF_G(nn.Module):
         with torch.no_grad():
             # Neural Encoding Volume
             volume_feature = None
+            pad = 0
             if self.encoding_net is not None:
+                pad = self.args.pad
                 self.encoding_net.train()
                 volume_feature, _, _ = self.encoding_net(imgs[:, :3],
                                                          proj_mats[:, :3],
                                                          near_fars[0,0],
-                                                         pad=self.args.pad)
+                                                         pad=pad)
             imgs = self.unpreprocess(imgs) # unnormalise for visualisation
 
             self.args.img_downscale = torch.rand((1,)) * 0.75 + 0.25
@@ -586,7 +592,7 @@ class DyMVSNeRF_G(nn.Module):
                 rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals, \
                 rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt = \
                     build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
-                                N_rays=self.N_rays, stratified=False, pad=self.args.pad,
+                                N_rays=self.N_rays, stratified=False, pad=pad,
                                 chunk=self.args.chunk, idx=chunk_idx, val=True, isRandom=False, scene_flow=True,
                                 flow_fwd=flow_fwds, flow_bwd=flow_bwds, mask_fwd=mask_fwds, mask_bwd=mask_bwds)
 

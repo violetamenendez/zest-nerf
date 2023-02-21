@@ -803,13 +803,15 @@ class MVSNeRFSystem(LightningModule):
             w2cs = batch['w2cs']
             c2ws, intrinsics = batch['c2ws'], batch['intrinsics']
             volume_feature = None
+            pad = 0
             if self.encoding_net is not None:
                 # Encoding volume
+                pad = self.hparams.pad
                 self.encoding_net.train()
                 volume_feature, img_feat, _ = self.encoding_net(imgs[:, :3],
                                                                 proj_mats[:, :3],
                                                                 near_fars[0,0],
-                                                                pad=self.hparams.pad)
+                                                                pad=pad)
                 logging.info("volume_feature "+str(volume_feature.shape))
 
             imgs = self.unpreprocess(imgs)
@@ -818,9 +820,9 @@ class MVSNeRFSystem(LightningModule):
 
                 rays_pts, rays_dir, _, rays_NDC, depth_candidates, depth, t_vals = \
                     build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars,
-                               self.hparams.N_samples, stratified=False,
-                               pad=self.hparams.pad, chunk=self.hparams.chunk,
-                               idx=chunk_idx, val=True, isRandom=False)
+                               self.hparams.N_samples, stratified=False, pad=pad,
+                               chunk=self.hparams.chunk, idx=chunk_idx, val=True,
+                               isRandom=False)
 
                 ret =  rendering(self.hparams, batch,
                                 rays_pts, rays_NDC,
