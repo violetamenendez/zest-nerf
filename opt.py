@@ -20,8 +20,6 @@ def config_parser(cmd=None):
                         help='config file path')
     parser.add_argument("--expname", type=str,
                         help='experiment name')
-    parser.add_argument("--basedir", type=str, default='./logs/',
-                        help='where to store ckpts and logs')
     parser.add_argument("--datadir", type=str, default='./data/llff/fern',
                         help='input data directory')
     parser.add_argument("--configdir", type=str, default='./configs/',
@@ -72,6 +70,12 @@ def config_parser(cmd=None):
                         help='training over keyframes of a video')
     parser.add_argument('--train_sceneflow', action='store_true',
                         help='training of a dynamic scene by predicting scene flow. See: https://www.cs.cornell.edu/~zl548/NSFF/')
+    parser.add_argument("--finetune_scene", type=str, default=None,
+                        help='name of scene to fine-tune model')
+    parser.add_argument("--seed_everything", type=int, default=-1,
+                        help='Set the random seed. Positive numbers only')
+    parser.add_argument('--use_closest_views', action='store_true',
+                        help='train using the closest views to the target image')
 
     # Hyperparameters
     parser.add_argument("--lrate", type=float, default=5e-4,
@@ -132,12 +136,6 @@ def config_parser(cmd=None):
                               otherwise perform 3 frame consistency. This will make training slower.')
     parser.add_argument("--depth_path", type=str, default=None,
                         help='GT depth for adversarial loss')
-    parser.add_argument("--finetune_scene", type=str, default=None,
-                        help='name of scene to fine-tune model')
-    parser.add_argument("--seed_everything", type=int, default=-1,
-                        help='Set the random seed. Positive numbers only')
-    parser.add_argument('--use_closest_views', action='store_true',
-                        help='train using the closest views to the target image')
 
     # rendering options
     parser.add_argument("--N_samples", type=int, default=128,
@@ -168,7 +166,7 @@ def config_parser(cmd=None):
 
     # logging/saving options
     parser.add_argument("--N_vis", type=int, default=20,
-                        help='frequency of visualize the depth')
+                        help='frequency of validation step in epochs')
     parser.add_argument("--save_dir", type=str, default="runs",
                         help='path to directory to save result, logs and ckpts')
 
