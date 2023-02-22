@@ -1040,7 +1040,7 @@ def main():
                       enable_model_summary=False,
                       gpus=hparams.num_gpus,
                       num_sanity_val_steps=0,
-                      check_val_every_n_epoch = max(system.hparams.num_epochs//system.hparams.N_vis,1),
+                      check_val_every_n_epoch=min(hparams.N_vis, math.ceil(hparams.num_epochs/hparams.N_vis)),
                       benchmark=True,
                       precision=system.hparams.precision,
                       accumulate_grad_batches=hparams.acc_grad,
