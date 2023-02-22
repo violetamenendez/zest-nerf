@@ -487,7 +487,7 @@ def build_color_volume(point_samples, data_mvs, imgs, img_feat=None, downscale=1
     return colors
 
 def NDC2Euclidean(xyz_ndc, H, W, f):
-    z_e = 2./ (xyz_ndc[..., 2:3] - 1. + 1e-6)
+    z_e = 2./ (torch.clamp(xyz_ndc[..., 2:3], -1.0, 0.99) - 1.)
     x_e = - xyz_ndc[..., 0:1] * z_e * W/ (2. * f)
     y_e = - xyz_ndc[..., 1:2] * z_e * H/ (2. * f)
 
