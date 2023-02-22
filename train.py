@@ -1018,8 +1018,10 @@ def main():
                                           save_last=True)
 
     logger = loggers.WandbLogger(
+        project="SVS",
         save_dir=hparams.save_dir,
         name=hparams.expname,
+        version=f"{hparams.expname}_v",
         log_model="all",
         offline=False
     )
