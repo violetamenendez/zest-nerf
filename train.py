@@ -15,7 +15,7 @@
 import imageio
 import logging, coloredlogs
 from pathlib import Path
-import math
+import math, random
 
 # torch
 import torch
@@ -1007,7 +1007,8 @@ def main():
     hparams.save_dir = Path(hparams.save_dir)
     system = MVSNeRFSystem(hparams, pts_embedder=hparams.pts_embedder, use_mvs=hparams.use_mvs, dir_embedder=hparams.dir_embedder)
 
-    save_dir_ckpts = hparams.save_dir / hparams.expname / 'ckpts'
+    save_dir = hparams.save_dir / hparams.expname
+    save_dir_ckpts = save_dir / 'ckpts'
     save_dir_ckpts.mkdir(parents=True, exist_ok=True)
     checkpoint_callback = ModelCheckpoint(dirpath=save_dir_ckpts,
                                           filename='{epoch:02d}-{step}-{val_loss:.3f}',
@@ -1017,11 +1018,22 @@ def main():
                                           save_top_k=5,
                                           save_last=True)
 
+    # Resume logging?
+    if Path(save_dir / 'wandb_id.txt').exists():
+        with open(Path(save_dir / 'wandb_id.txt')) as f:
+            wandb_id = int(f.readline())
+            print(f"Resuming W&B job with id {wandb_id}")
+    else:
+        with open(Path(save_dir / 'wandb_id.txt'), 'w') as f:
+            wandb_id = str(random.randint(0, 1000000))
+            f.write(wandb_id)
+            print(f"Starting W&B job with id {wandb_id}")
+
     logger = loggers.WandbLogger(
         project="SVS",
         save_dir=hparams.save_dir,
         name=hparams.expname,
-        version=f"{hparams.expname}_v",
+        version=f"{hparams.expname}_{wandb_id}",
         log_model="all",
         offline=False
     )
