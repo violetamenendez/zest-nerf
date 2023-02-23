@@ -358,6 +358,7 @@ class MVSNeRFSystem(LightningModule):
         ##########################################
         # Temporal photometric consistency - l_pho
         # Dynamic-only rendering loss
+        weights_map_dd = weights_map_dd.unsqueeze(-1).detach()
         if self.global_step <= self.decay_iteration * 1000:
             # Initialisation
             pho_loss = self.loss(rgb_map_ref_dy, rgb_gt)
@@ -368,7 +369,6 @@ class MVSNeRFSystem(LightningModule):
                                    rgb_gt,
                                    prob_map_prev.unsqueeze(-1))
         else:
-            weights_map_dd = weights_map_dd.unsqueeze(-1).detach()
             pho_loss = mse_masked(rgb_map_ref_dy,
                                   rgb_gt,
                                   weights_map_dd)
@@ -381,7 +381,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.with_chain_loss:
             pho_loss += mse_masked(rgb_map_pp_dy,
                                    rgb_gt,
-                                   weights_map_dd.unsqueeze(-1))
+                                   weights_map_dd)
         self.log('pho_loss', pho_loss)
         ##########################################
 
