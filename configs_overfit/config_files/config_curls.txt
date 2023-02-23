@@ -7,6 +7,7 @@ dataset_name = nsff
 datadir = /storage/datasets/NSFF/nvidia_data_full/
 configdir = configs_overfit/ # Directory containing dataset splits
 save_dir = /storage/projects/ganmvsnerf/runs
+finetune_scene = curls
 
 # Training
 num_epochs = 6000
