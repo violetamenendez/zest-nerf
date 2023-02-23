@@ -1,5 +1,4 @@
 from pathlib import Path
-import random
 import numpy as np
 
 import torch
@@ -10,8 +9,7 @@ from PIL import Image
 from torchvision import transforms as T
 from kornia import create_meshgrid
 
-from .data_utils import get_nearest_pose_ids, center_poses
-from utils import read_pfm
+from .data_utils import center_poses
 
 
 class NSFFDataset(Dataset):
