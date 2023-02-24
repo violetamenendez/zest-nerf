@@ -96,6 +96,8 @@ def config_parser(cmd=None):
                         help='Depth smoothness loss coefficient')
     parser.add_argument("--lambda_cyc", type=float, default=0.1,
                         help='Scene flow cycle consistency loss coefficient')
+    parser.add_argument("--lambda_prob_reg", type=float, default=0.1,
+                        help='Scene flow disocclusion weights regularization loss coefficient')
     parser.add_argument("--lambda_sf_reg", type=float, default=0.1,
                         help='Scene flow regularization loss coefficient')
     parser.add_argument("--lambda_sf_smooth", type=float, default=0.1,

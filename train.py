@@ -354,6 +354,9 @@ class MVSNeRFSystem(LightningModule):
         raw_pts_pp = results['raw_pts_pp'] # (frame_t - 2) or (frame_t + 2)
         # Depth map
         depth_map_ref_dy = results['depth_map_ref_dy']
+        # Disocclusion weights
+        raw_prob_ref2post = results['raw_prob_ref2post'] # Disocclusion weights
+        raw_prob_ref2prev = results['raw_prob_ref2prev'] # Disocclusion weights
 
         ##########################################
         # Temporal photometric consistency - l_pho
@@ -385,6 +388,15 @@ class MVSNeRFSystem(LightningModule):
         self.log('pho_loss', pho_loss)
         ##########################################
 
+        #######################################
+        # Disocclusion weights regularisation #
+        #######################################
+        # Avoid the trivial solution where all dis. weights are 0
+        # by adding l1 regularisation to encourage predicted weights
+        # to be close to 1
+        prob_reg_loss = torch.mean(torch.abs(raw_prob_ref2prev)) \
+                      + torch.mean(torch.abs(raw_prob_ref2post))
+        self.log('prob_reg_loss', self.hparams.lambda_prob_reg * prob_reg_loss)
 
         ########################
         # Combined loss - l_cb #
@@ -400,8 +412,8 @@ class MVSNeRFSystem(LightningModule):
         #######################################
         # The predicted forward scene flow at time t
         # is consistent with the backward scene flow at time t+1
-        weight_post = 1. - results['raw_prob_ref2post'] # Disocclusion weights
-        weight_prev = 1. - results['raw_prob_ref2prev'] # Disocclusion weights
+        weight_post = 1. - raw_prob_ref2post # Disocclusion weights
+        weight_prev = 1. - raw_prob_ref2prev # Disocclusion weights
         sf_cycle_loss = mse_masked(raw_sf_ref2post,
                                   -raw_sf_post2ref,
                                    weight_post.unsqueeze(-1))
@@ -527,6 +539,7 @@ class MVSNeRFSystem(LightningModule):
         # L = l_pho + l_cb + l_cyc + l_reg (min+sp+temp+entropy) + l_data (flow+depth)
         sceneflow_loss = pho_loss + combined_loss \
                        + self.hparams.lambda_cyc * sf_cycle_loss \
+                       + self.hparams.lambda_prob_reg * prob_reg_loss \
                        + self.hparams.lambda_sf_reg * sf_min_loss \
                        + self.hparams.lambda_sf_smooth * sf_sp_loss \
                        + self.hparams.lambda_sf_smooth * sf_st_loss \
