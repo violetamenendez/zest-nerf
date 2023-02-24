@@ -301,13 +301,13 @@ class MVSNeRFSystem(LightningModule):
 
         return (data - mean) / std
 
-    def forward(self, data_mvs):
+    def forward(self, data_mvs, chain_5frames=False):
         if self.time_codes is not None:
             print("training forward has time codes", self.time_codes.shape)
 
         time_code = self.time_codes[data_mvs['keyframe_id']].to(self.device) if self.time_codes is not None else None
 
-        return self.generator(data_mvs, self.global_step, time_codes=time_code)
+        return self.generator(data_mvs, self.global_step, time_codes=time_code, chain_5frames=chain_5frames)
 
     def train_sf_step(self, batch, results):
         """Compute all losses for the Scene Flow model"""
@@ -329,7 +329,7 @@ class MVSNeRFSystem(LightningModule):
         rgb_map_ref_dy = results['rgb_map_ref_dy'] # Dynamic-only RGB map at current time frame_t
         rgb_map_post_dy = results['rgb_map_post_dy'] # Dynamic-only RGB map at time (frame_t + 1)
         rgb_map_prev_dy = results['rgb_map_prev_dy'] # Dynamic-only RGB map at time (frame_t - 1)
-        rgb_map_pp_dy = results['rgb_map_pp_dy'] if self.hparams.with_chain_loss else None # Dynamic-only RGB map at time (frame_t - 2) or (frame_t + 2)
+        rgb_map_pp_dy = results['rgb_map_pp_dy'] if self.chain_5frames else None # Dynamic-only RGB map at time (frame_t - 2) or (frame_t + 2)
         prob_map_post = results['prob_map_post'] # Confidence of the RGB map at time (frame_t + 1)
         prob_map_prev = results['prob_map_prev'] # Confidence of the RGB map at time (frame_t - 1)
         # Scene flow
@@ -381,7 +381,7 @@ class MVSNeRFSystem(LightningModule):
             pho_loss += mse_masked(rgb_map_prev_dy,
                                    rgb_gt,
                                    prob_map_prev.unsqueeze(-1) * weights_map_dd)
-        if self.hparams.with_chain_loss:
+        if self.chain_5frames:
             pho_loss += mse_masked(rgb_map_pp_dy,
                                    rgb_gt,
                                    weights_map_dd)
@@ -551,6 +551,13 @@ class MVSNeRFSystem(LightningModule):
 
     def training_step(self, batch, batch_idx, optimizer_idx=None):
         logging.info("TRAINING STEP")
+
+        if self.hparams.with_chain_loss \
+            and self.global_step > self.decay_iteration * 1000 * 2:
+            self.chain_5frames = True
+        else:
+            self.chain_5frames = False
+
         results = self(batch)
 
         rgb_pred = results['rgb_map']

@@ -380,7 +380,7 @@ class MVSNeRF_G(nn.Module):
 
         return (data - mean) / std
 
-    def forward(self, x, step=0, time_codes=None):
+    def forward(self, x, step=0, time_codes=None, chain_5frames=False):
         if time_codes is not None:
             print("generator has time codes", time_codes.shape)
 
@@ -452,7 +452,6 @@ class DyMVSNeRF_G(nn.Module):
         self.N_rays = args.batch_size
         self.N_samples = args.N_samples
         self.chain_bwd = False
-        self.chain_5frames = args.with_chain_loss
         self.args = args
 
     def unpreprocess(self, data, shape=(1,1,3,1,1)):
@@ -465,7 +464,7 @@ class DyMVSNeRF_G(nn.Module):
 
         return (data - mean) / std
 
-    def forward(self, x, step=0, time_codes=None):
+    def forward(self, x, step=0, time_codes=None, chain_5frames=False):
         if time_codes is not None:
             print("generator has time codes", time_codes.shape)
 
@@ -531,7 +530,7 @@ class DyMVSNeRF_G(nn.Module):
                         white_bkgd=self.args.white_bkgd,
                         scene_flow=True,
                         chain_bwd=self.chain_bwd,
-                        chain_5frames=self.chain_5frames,
+                        chain_5frames=chain_5frames,
                         ref_frame_idx=ref_frame_idx,
                         num_frames=num_frames)
 
