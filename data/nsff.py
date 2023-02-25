@@ -23,7 +23,7 @@ class NSFFDataset(Dataset):
         self.config_dir = Path(config_dir)
         self.split = split
         self.downSample = downSample
-        self.img_wh = (int(360*downSample),int(480*downSample))
+        self.img_wh = (int(544*downSample),int(288*downSample))
         assert self.img_wh[0] % 32 == 0 or self.img_wh[1] % 32 == 0, \
             'image width must be divisible by 32, you may need to modify the imgScale'
         self.max_len = max_len
