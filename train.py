@@ -65,7 +65,10 @@ class MVSNeRFSystem(LightningModule):
         self.hparams.use_mvs = use_mvs
 
         # From MVSSystem
-        self.hparams.feat_dim = 8+self.hparams.num_input*4
+        if self.hparams.train_sceneflow:
+            self.hparams.feat_dim = 8+self.hparams.num_keyframes*4
+        else:
+            self.hparams.feat_dim = 8+self.hparams.num_input*4
         self.idx = 0 # validation step counter
 
         # Scene Flow config
@@ -195,6 +198,9 @@ class MVSNeRFSystem(LightningModule):
             kwargs['depth_path'] = self.hparams.depth_path
         if self.hparams.dataset_name == 'neural3Dvideo':
             kwargs['train_key_frames'] = self.hparams.key_frames
+        if self.hparams.dataset_name == 'nsff':
+            kwargs['num_keyframes'] = self.hparams.num_keyframes
+            kwargs['use_mvs'] = self.hparams.use_mvs
         self.train_dataset = dataset(self.hparams.datadir,
                                      split='train',
                                      config_dir=self.hparams.configdir,
@@ -207,6 +213,9 @@ class MVSNeRFSystem(LightningModule):
             kwargs['max_len'] = 10
         if self.hparams.dataset_name == 'llff':
             kwargs['depth_path'] = None
+        if self.hparams.dataset_name == 'nsff':
+            kwargs['num_keyframes'] = self.hparams.num_keyframes
+            kwargs['use_mvs'] = self.hparams.use_mvs
         self.val_dataset = dataset(self.hparams.datadir,
                                    split='val',
                                    config_dir=self.hparams.configdir,
@@ -220,6 +229,9 @@ class MVSNeRFSystem(LightningModule):
             # kwargs['img_wh'] = (960,640)
         if self.hparams.dataset_name == 'llff':
             kwargs['depth_path'] = None
+        if self.hparams.dataset_name == 'nsff':
+            kwargs['num_keyframes'] = self.hparams.num_keyframes
+            kwargs['use_mvs'] = self.hparams.use_mvs
         self.test_dataset = dataset(self.hparams.datadir,
                                     split='test',
                                     config_dir=self.hparams.configdir,
@@ -317,7 +329,7 @@ class MVSNeRFSystem(LightningModule):
         depth_gt = results['depth_gt']
         # Camera parameters
         N, V, C, H, W = batch['images'].shape
-        focal = batch['intrinsics'][..., 0, 0].item() # focal point
+        focal = batch['intrinsics'][:,-1, 0, 0].item() # focal point
         w2cs = batch['w2cs'] # Reference world-to-camera matrix
         fnb_w2cs = batch['fnb_w2cs'] # First neighbours w2c matrix
         # Time

@@ -66,8 +66,10 @@ def config_parser(cmd=None):
                         help='use MVS encoding volume to generalise scenes')
     parser.add_argument('--train_video', action='store_true',
                         help='training of a dynamic scene by using time codes. See: https://neural-3d-video.github.io/')
-    parser.add_argument('--key_frames', action='store_true',
+    parser.add_argument('--use_keyframes', action='store_true',
                         help='training over keyframes of a video')
+    parser.add_argument('--num_keyframes', type=int, default=10,
+                        help='how many keyframes to train on')
     parser.add_argument('--train_sceneflow', action='store_true',
                         help='training of a dynamic scene by predicting scene flow. See: https://www.cs.cornell.edu/~zl548/NSFF/')
     parser.add_argument("--finetune_scene", type=str, default=None,

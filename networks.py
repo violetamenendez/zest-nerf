@@ -1064,7 +1064,7 @@ class MVSNet(nn.Module):
         img_feat[:, -32:] = volume_sq_sum * count - (volume_sum * count) ** 2
         del volume_sq_sum, volume_sum, count
 
-        logging.info("outputs "+str(img_feat.shape)+", "+str(in_mask.shape))
+        logging.info("outputs "+str(img_feat.shape)+", "+str(in_masks.shape))
         return img_feat, in_masks
 
     def forward(self, imgs, proj_mats, near_far, pad=0,  return_color=False,

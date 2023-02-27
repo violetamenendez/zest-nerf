@@ -15,13 +15,16 @@ from .data_utils import center_poses
 class NSFFDataset(Dataset):
     def __init__(self, root_dir, config_dir, split='train',
                  downSample=1.0, max_len=-1,
-                 scene=None, closest_views=False):
+                 scene=None, closest_views=False,
+                 use_mvs=False, num_keyframes=10):
         """
         Neural Scene Flow Fields dataset https://github.com/zhengqili/Neural-Scene-Flow-Fields
         """
         self.root_dir = Path(root_dir)
         self.config_dir = Path(config_dir)
         self.split = split
+        self.use_mvs = use_mvs
+        self.num_keyframes = num_keyframes
         self.downSample = downSample
         self.img_wh = (int(544*downSample),int(288*downSample))
         assert self.img_wh[0] % 32 == 0 or self.img_wh[1] % 32 == 0, \
@@ -54,6 +57,7 @@ class NSFFDataset(Dataset):
         self.image_paths, self.disp_paths, self.mask_paths = {}, {}, {}
         self.flow_fwd_paths, self.flow_bwd_paths = {}, {}
         self.metas = []
+        self.key_frames = {}
         for scene in self.scenes:
             scene_path = self.root_dir / scene
             self.image_paths[scene] = sorted(scene_path.glob('**/images/*'))
@@ -65,6 +69,11 @@ class NSFFDataset(Dataset):
             num_frames = len(self.image_paths[scene])
             for frame_t in range(num_frames):
                 self.metas += [(scene, frame_t, num_frames)]
+
+            self.key_frames[scene] = []
+            interval = num_frames // (self.num_keyframes - 1)
+            for frame_id in range(0, num_frames, interval):
+                self.key_frames[scene].append(frame_id)
 
     def build_proj_mats(self):
         """
@@ -169,7 +178,11 @@ class NSFFDataset(Dataset):
         scene, target_frame, num_frames = self.metas[idx]
         print(f"Selected target {scene}, {target_frame}, {num_frames}")
 
-        view_ids = [target_frame]
+        # all frames for MVS volume + target_frame
+        view_ids = []
+        if self.use_mvs:
+            view_ids += self.key_frames[scene]
+        view_ids += [target_frame]
         # First neighbours
         first_nb_ids = [max(target_frame - 1, 0), # +-1 frames
                         min(target_frame + 1, int(num_frames) - 1)]
