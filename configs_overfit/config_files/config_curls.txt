@@ -18,6 +18,8 @@ batch_size = 1024
 num_extra_samples = 512
 use_motion_mask = True
 pad = 0 # For MVS with multiple cameras, to be able to warp the volume
+img_h = 480
+img_w = 360
 
 # Network
 use_viewdirs = True

@@ -27,6 +27,10 @@ def config_parser(cmd=None):
     parser.add_argument('--imgScale_train', type=float, default=1.0)
     parser.add_argument('--imgScale_test', type=float, default=1.0)
     parser.add_argument('--img_downscale', type=float, default=1.0)
+    parser.add_argument('--img_h', type=int, default=288,
+                        help='Size of image to overfit to on nsff')
+    parser.add_argument('--img_w', type=int, default=544,
+                        help='Size of image to overfit to on nsff')
     parser.add_argument('--pad', type=int, default=24)
 
     # loader options

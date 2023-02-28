@@ -201,6 +201,8 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'nsff':
             kwargs['num_keyframes'] = self.hparams.num_keyframes
             kwargs['use_mvs'] = self.hparams.use_mvs
+            kwargs['img_h'] = self.hparams.img_h
+            kwargs['img_w'] = self.hparams.img_w
         self.train_dataset = dataset(self.hparams.datadir,
                                      split='train',
                                      config_dir=self.hparams.configdir,
@@ -216,6 +218,8 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'nsff':
             kwargs['num_keyframes'] = self.hparams.num_keyframes
             kwargs['use_mvs'] = self.hparams.use_mvs
+            kwargs['img_h'] = self.hparams.img_h
+            kwargs['img_w'] = self.hparams.img_w
         self.val_dataset = dataset(self.hparams.datadir,
                                    split='val',
                                    config_dir=self.hparams.configdir,
@@ -232,6 +236,8 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'nsff':
             kwargs['num_keyframes'] = self.hparams.num_keyframes
             kwargs['use_mvs'] = self.hparams.use_mvs
+            kwargs['img_h'] = self.hparams.img_h
+            kwargs['img_w'] = self.hparams.img_w
         self.test_dataset = dataset(self.hparams.datadir,
                                     split='test',
                                     config_dir=self.hparams.configdir,

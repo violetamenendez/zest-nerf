@@ -16,7 +16,8 @@ class NSFFDataset(Dataset):
     def __init__(self, root_dir, config_dir, split='train',
                  downSample=1.0, max_len=-1,
                  scene=None, closest_views=False,
-                 use_mvs=False, num_keyframes=10):
+                 use_mvs=False, num_keyframes=10,
+                 img_h=288, img_w=544):
         """
         Neural Scene Flow Fields dataset https://github.com/zhengqili/Neural-Scene-Flow-Fields
         """
@@ -26,7 +27,7 @@ class NSFFDataset(Dataset):
         self.use_mvs = use_mvs
         self.num_keyframes = num_keyframes
         self.downSample = downSample
-        self.img_wh = (int(544*downSample),int(288*downSample))
+        self.img_wh = (int(img_w*downSample),int(img_h*downSample))
         assert self.img_wh[0] % 32 == 0 or self.img_wh[1] % 32 == 0, \
             'image width must be divisible by 32, you may need to modify the imgScale'
         self.max_len = max_len
