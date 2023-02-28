@@ -380,7 +380,7 @@ class MVSNeRF_G(nn.Module):
 
         return (data - mean) / std
 
-    def forward(self, x, step=0, time_codes=None, chain_5frames=False):
+    def forward(self, x, step=0, time_codes=None):
         if time_codes is not None:
             print("generator has time codes", time_codes.shape)
 
@@ -434,7 +434,8 @@ class MVSNeRF_G(nn.Module):
         return ret
 
 class DyMVSNeRF_G(nn.Module):
-    def __init__(self, args, nerf_dynamic, nerf_static, encoding, embedding_pts, embedding_xyzt, embedding_dir):
+    def __init__(self, args, decay_iteration, nerf_dynamic, nerf_static,
+                 encoding, embedding_pts, embedding_xyzt, embedding_dir):
         """
         Generator using MVSNeRF
         """
@@ -452,6 +453,7 @@ class DyMVSNeRF_G(nn.Module):
         self.N_rays = args.batch_size
         self.N_samples = args.N_samples
         self.chain_bwd = False
+        self.decay_iteration = decay_iteration
         self.args = args
 
     def unpreprocess(self, data, shape=(1,1,3,1,1)):
@@ -464,7 +466,7 @@ class DyMVSNeRF_G(nn.Module):
 
         return (data - mean) / std
 
-    def forward(self, x, step=0, time_codes=None, chain_5frames=False):
+    def forward(self, x, step=0, time_codes=None):
         if time_codes is not None:
             print("generator has time codes", time_codes.shape)
 
@@ -486,6 +488,13 @@ class DyMVSNeRF_G(nn.Module):
         mask_bwds = x['mask_bwds']
         # Ground truth disparity
         depths = x['depths']
+
+        # Decay parameters
+        if self.args.with_chain_loss \
+            and step > self.decay_iteration * 1000 * 2:
+            chain_5frames = True
+        else:
+            chain_5frames = False
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
@@ -542,6 +551,7 @@ class DyMVSNeRF_G(nn.Module):
         ret['rays_mask_fwd_gt'] = rays_mask_fwd_gt
         ret['rays_mask_bwd_gt'] = rays_mask_bwd_gt
         ret['chain_bwd'] = self.chain_bwd
+        ret['chain_5frames'] = chain_5frames
 
         return ret
 
