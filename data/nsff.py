@@ -256,43 +256,44 @@ class NSFFDataset(Dataset):
                 img = self.transform(img)  # (3, h, w)
                 imgs.append(self.src_transform(img))
 
-                # Optical flow
-                if target_frame == 0:
-                    # First frame has only forwards flow field
-                    flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
-                    flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
-                    flow_bwd, bwd_mask = np.zeros_like(flow_fwd), np.zeros_like(fwd_mask)
-                elif target_frame == num_frames - 1:
-                    # Last frame has only backwards flow field
-                    flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
-                    flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
-                    flow_fwd, fwd_mask = np.zeros_like(flow_bwd), np.zeros_like(bwd_mask)
-                else:
-                    flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
-                    flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
-                    flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
-                    flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
-                # Correct flow values according to coordinates
-                uv_grid = create_meshgrid(self.img_wh[1], self.img_wh[0], normalized_coordinates=False)[0].numpy()
-                flow_fwd = flow_fwd + uv_grid
-                flow_bwd = flow_bwd + uv_grid
+        # Optical flow for target frame
+        if target_frame == 0:
+            # First frame has only forwards flow field
+            flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
+            flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
+            flow_bwd, bwd_mask = np.zeros_like(flow_fwd), np.zeros_like(fwd_mask)
+        elif target_frame == num_frames - 1:
+            # Last frame has only backwards flow field
+            flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
+            flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
+            flow_fwd, fwd_mask = np.zeros_like(flow_bwd), np.zeros_like(bwd_mask)
+        else:
+            flow_fwd_path = self.flow_fwd_paths[scene][target_frame]
+            flow_bwd_path = self.flow_bwd_paths[scene][target_frame - 1]
+            flow_fwd, fwd_mask = self.read_optical_flow(flow_fwd_path, self.img_wh)
+            flow_bwd, bwd_mask = self.read_optical_flow(flow_bwd_path, self.img_wh)
+        # Correct flow values according to coordinates
+        uv_grid = create_meshgrid(self.img_wh[1], self.img_wh[0], normalized_coordinates=False)[0].numpy()
+        flow_fwd = flow_fwd + uv_grid
+        flow_bwd = flow_bwd + uv_grid
 
-                flow_fwds.append(flow_fwd)
-                flow_bwds.append(flow_bwd)
-                mask_fwds.append(fwd_mask)
-                mask_bwds.append(bwd_mask)
+        flow_fwds.append(flow_fwd)
+        flow_bwds.append(flow_bwd)
+        mask_fwds.append(fwd_mask)
+        mask_bwds.append(bwd_mask)
 
-                disp_path = self.disp_paths[scene][target_frame]
-                disp = self.read_disp(disp_path, self.img_wh)
-                disps.append(disp)
+        # Disparity for target frame
+        disp_path = self.disp_paths[scene][target_frame]
+        disp = self.read_disp(disp_path, self.img_wh)
+        disps.append(disp)
 
         sample = {}
         sample['images'] = torch.stack(imgs).float()  # (V, 3, H, W)
-        sample['depths'] = torch.from_numpy(np.stack(disps)).float() # (V, H, W)
-        sample['flow_fwds'] = torch.from_numpy(np.stack(flow_fwds)).float().permute(0, 3, 1, 2) # (V, 2, H, W)
-        sample['flow_bwds'] = torch.from_numpy(np.stack(flow_bwds)).float().permute(0, 3, 1, 2) # (V, 2, H, W)
-        sample['mask_fwds'] = torch.from_numpy(np.stack(mask_fwds)).float() # (V, H, W)
-        sample['mask_bwds'] = torch.from_numpy(np.stack(mask_bwds)).float() # (V, H, W)
+        sample['depths'] = torch.from_numpy(np.stack(disps)).float() # (1, H, W)
+        sample['flow_fwds'] = torch.from_numpy(np.stack(flow_fwds)).float().permute(0, 3, 1, 2) # (1, 2, H, W)
+        sample['flow_bwds'] = torch.from_numpy(np.stack(flow_bwds)).float().permute(0, 3, 1, 2) # (1, 2, H, W)
+        sample['mask_fwds'] = torch.from_numpy(np.stack(mask_fwds)).float() # (1, H, W)
+        sample['mask_bwds'] = torch.from_numpy(np.stack(mask_bwds)).float() # (1, H, W)
         sample['w2cs'] = torch.stack(w2cs).float()  # (V, 4, 4)
         sample['c2ws'] = torch.stack(c2ws).float()  # (V, 4, 4)
         sample['near_fars'] = torch.stack(near_fars).float() # (V, 2)
