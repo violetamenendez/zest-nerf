@@ -14,7 +14,9 @@ num_epochs = 6000
 decay_iteration = 30
 seed_everything = 1
 train_sceneflow = True
-batch_size = 4096
+batch_size = 1024
+num_extra_samples = 512
+use_motion_mask = True
 pad = 0 # For MVS with multiple cameras, to be able to warp the volume
 
 # Network

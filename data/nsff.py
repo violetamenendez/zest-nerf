@@ -287,6 +287,15 @@ class NSFFDataset(Dataset):
         disp = self.read_disp(disp_path, self.img_wh)
         disps.append(disp)
 
+        # Motion mask for target frame
+        mask_path = self.mask_paths[scene][target_frame]
+        mask = Image.open(mask_path).convert('L')
+        mask = mask.resize(self.img_wh, Image.NEAREST)
+        mask = self.transform(mask)
+        mask = (mask > 1e-3).float().squeeze()
+        coords = torch.where(mask > 0.1)
+        motion_coords = torch.stack(coords, -1).float()
+
         sample = {}
         sample['images'] = torch.stack(imgs).float()  # (V, 3, H, W)
         sample['depths'] = torch.from_numpy(np.stack(disps)).float() # (1, H, W)
@@ -294,6 +303,7 @@ class NSFFDataset(Dataset):
         sample['flow_bwds'] = torch.from_numpy(np.stack(flow_bwds)).float().permute(0, 3, 1, 2) # (1, 2, H, W)
         sample['mask_fwds'] = torch.from_numpy(np.stack(mask_fwds)).float() # (1, H, W)
         sample['mask_bwds'] = torch.from_numpy(np.stack(mask_bwds)).float() # (1, H, W)
+        sample['motion_coords'] = motion_coords # (M, 2) e.g., torch.Size([132079, 2])
         sample['w2cs'] = torch.stack(w2cs).float()  # (V, 4, 4)
         sample['c2ws'] = torch.stack(c2ws).float()  # (V, 4, 4)
         sample['near_fars'] = torch.stack(near_fars).float() # (V, 2)

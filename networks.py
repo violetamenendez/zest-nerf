@@ -488,6 +488,8 @@ class DyMVSNeRF_G(nn.Module):
         mask_bwds = x['mask_bwds']
         # Ground truth disparity
         depths = x['depths']
+        # Target motion masks
+        motion_coords = x['motion_coords'][-1]
 
         # Decay parameters
         if self.args.with_chain_loss \
@@ -495,6 +497,12 @@ class DyMVSNeRF_G(nn.Module):
             chain_5frames = True
         else:
             chain_5frames = False
+
+        if self.args.use_motion_mask and step < self.decay_iteration * 1000:
+            num_extra_samples = self.args.num_extra_samples
+        else:
+            num_extra_samples = 0
+
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
@@ -514,9 +522,9 @@ class DyMVSNeRF_G(nn.Module):
         # NOTE: I think this is the same for NSFF (or equivalent)
         rays_pts, rays_dir, target_s, rays_NDC, depth_candidates, rays_depth_gt, t_vals, \
         rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt = \
-            build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples,
-                          N_rays=self.N_rays, pad=pad,
-                          patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
+            build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.N_samples, N_rays=self.N_rays,
+                          pad=pad, patch_size=self.args.patch_size, scale_anneal=self.args.scale_anneal,
+                          num_extra_samples=num_extra_samples, motion_coords=motion_coords,
                           step=step, variable_patches=(self.args.gan_type=='graf'), scene_flow=True,
                           flow_fwd=flow_fwds, flow_bwd=flow_bwds, mask_fwd=mask_fwds, mask_bwd=mask_bwds)
 

@@ -131,7 +131,8 @@ def patch_ray_sampler(patch_size, step, random_shift=True, random_scale=True,
     return torch.cat([h, w], dim=2)
 
 def get_rays_mvs(H, W, intrinsic, c2w, N_rays=1024, isRandom=True, chunk=-1, idx=-1,
-                 N_patches=None, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False):
+                 N_patches=None, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False,
+                 num_extra_samples=0, motion_coords=None):
     """
     Get ray origin and normalized directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
@@ -200,6 +201,15 @@ def get_rays_mvs(H, W, intrinsic, c2w, N_rays=1024, isRandom=True, chunk=-1, idx
 
     xs = xs.repeat(intrinsic.shape[0],1)
     ys = ys.repeat(intrinsic.shape[0],1)
+
+    if motion_coords is not None and num_extra_samples > 0:
+        # Add coordinates for harder areas due to motion
+        hard_idx = torch.randint(0,motion_coords.shape[0],(num_extra_samples,))
+        hard_coords = motion_coords[hard_idx]
+        xs_hard = hard_coords[:, 1].unsqueeze(0)
+        ys_hard = hard_coords[:, 0].unsqueeze(0)
+        xs = torch.cat([xs, xs_hard], dim=1)
+        ys = torch.cat([ys, ys_hard], dim=1)
 
     # Camera Coordinate homogeneous points
     dirs = torch.stack([(xs-intrinsic[:,0,2].reshape(-1,1))/intrinsic[:,0,0].reshape(-1,1),
@@ -280,7 +290,8 @@ def get_ndc_coordinate(w2c_ref, intrinsic_ref, point_samples, inv_scale, near=2,
 def build_rays_base(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_rays=1024,
                     stratified=True, pad=0, chunk=-1, idx=-1, ref_idx=0, val=False,
                     isRandom=True, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False,
-                    scene_flow=False, flow_fwd=None, flow_bwd=None, mask_fwd=None, mask_bwd=None):
+                    scene_flow=False, flow_fwd=None, flow_bwd=None, mask_fwd=None, mask_bwd=None,
+                    num_extra_samples=0, motion_coords=None):
     '''
 
     Args:
@@ -319,11 +330,15 @@ def build_rays_base(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, 
                                                      chunk=chunk, idx=idx,
                                                      N_patches=N_patches, patch_size=patch_size,
                                                      scale_anneal=scale_anneal, step=step,
-                                                     variable_patches=variable_patches)   # [N_rays 3]
+                                                     variable_patches=variable_patches,
+                                                     num_extra_samples=num_extra_samples,
+                                                     motion_coords=motion_coords)   # [N_rays 3]
     if val:
         ray_samples = H * W if chunk < 0 else pixel_coordinates.shape[-1]
     else:
         ray_samples = N_rays
+        if motion_coords is not None:
+            ray_samples += num_extra_samples
 
     # position
     rays_o = rays_o.reshape(1, 1, 3)
@@ -394,7 +409,8 @@ def build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_ray
 def build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_rays=1024,
                   stratified=True, pad=0, chunk=-1, idx=-1, ref_idx=0, val=False,
                   isRandom=True, patch_size=-1, scale_anneal=-1, step=0, variable_patches=False,
-                  scene_flow=False, flow_fwd=None, flow_bwd=None, mask_fwd=None, mask_bwd=None):
+                  scene_flow=False, flow_fwd=None, flow_bwd=None, mask_fwd=None, mask_bwd=None,
+                  num_extra_samples=0, motion_coords=None):
 
     point_samples, rays_d, color, points_ndc, \
         depth_candidate, rays_depth_gt, t_vals, \
@@ -407,7 +423,9 @@ def build_rays_dy(imgs, depths, w2cs, c2ws, intrinsics, near_fars, N_samples, N_
                                                              variable_patches=variable_patches,
                                                              scene_flow=scene_flow,
                                                              flow_fwd=flow_fwd, flow_bwd=flow_bwd,
-                                                             mask_fwd=mask_fwd, mask_bwd=mask_bwd)
+                                                             mask_fwd=mask_fwd, mask_bwd=mask_bwd,
+                                                             num_extra_samples=num_extra_samples,
+                                                             motion_coords=motion_coords)
 
     return point_samples, rays_d, color, points_ndc, depth_candidate, rays_depth_gt, t_vals, \
         rays_flow_fwd_gt, rays_flow_bwd_gt, rays_mask_fwd_gt, rays_mask_bwd_gt

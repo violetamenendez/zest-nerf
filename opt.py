@@ -32,6 +32,8 @@ def config_parser(cmd=None):
     # loader options
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--patch_size", type=int, default=-1)
+    parser.add_argument("--num_extra_samples", type=int, default=512,
+                        help="Number of extra rays to sample on hard coordinates when training Scene Flows")
     parser.add_argument("--num_epochs", type=int, default=8)
     parser.add_argument("--pts_dim", type=int, default=3)
     parser.add_argument("--dir_dim", type=int, default=3)
@@ -78,6 +80,8 @@ def config_parser(cmd=None):
                         help='Set the random seed. Positive numbers only')
     parser.add_argument('--use_closest_views', action='store_true',
                         help='train using the closest views to the target image')
+    parser.add_argument('--use_motion_mask', action='store_true',
+                        help='train scene flow using predicted motion masks')
 
     # Hyperparameters
     parser.add_argument("--lrate", type=float, default=5e-4,
