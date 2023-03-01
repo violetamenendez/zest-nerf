@@ -1067,7 +1067,6 @@ def main():
         save_dir=hparams.save_dir,
         name=hparams.expname,
         version=f"{hparams.expname}_{wandb_id}",
-        log_model="all",
         offline=False
     )
 
