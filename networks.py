@@ -510,8 +510,8 @@ class DyMVSNeRF_G(nn.Module):
         pad = 0
         if self.encoding_net is not None:
             pad = self.args.pad
-            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
-                                                                       proj_mats[:, :3],
+            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :-1],
+                                                                       proj_mats[:, :-1],
                                                                        near_fars[0,0],
                                                                        pad=pad,
                                                                        vis_test=self.args.vis_cnn,
