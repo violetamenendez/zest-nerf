@@ -12,7 +12,6 @@ finetune_scene = kid-running
 # Training
 num_epochs = 6000
 decay_iteration = 30
-seed_everything = 1
 train_sceneflow = True
 batch_size = 1024
 num_extra_samples = 512
