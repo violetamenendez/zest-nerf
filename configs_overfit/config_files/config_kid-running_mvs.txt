@@ -15,6 +15,11 @@ decay_iteration = 30
 seed_everything = 1
 train_sceneflow = True
 batch_size = 1024
+num_extra_samples = 512
+use_motion_mask = True
+img_h = 288
+img_w = 512
+# Encoding volume
 use_mvs = True
 pad = 24 # For MVS with multiple cameras, to be able to warp the volume
 num_keyframes = 10
