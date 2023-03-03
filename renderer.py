@@ -88,7 +88,7 @@ def depth2dist(z_vals, cos_angle):
     dists = dists * cos_angle
     return dists
 
-def raw2alpha(sigma):
+def raw2alpha(sigma, dist):
     """
     Function for computing density from model prediction.
     This value is strictly between [0, 1].
@@ -96,7 +96,8 @@ def raw2alpha(sigma):
     logging.info("RAW2ALPHA")
     logging.info("inputs "+str(sigma.shape))
 
-    alpha = 1. - torch.exp(-sigma)
+    # NeRF does:
+    alpha = 1. - torch.exp(-sigma * dist)
 
     # Transmission
     # Compute weight for RGB of each sample along each ray.
@@ -111,7 +112,7 @@ def raw2alpha(sigma):
     logging.info("outputs "+str(alpha.shape)+","+str(weights.shape))
     return alpha, weights
 
-def raw2outputs(raw, z_vals, dists, white_bkgd=False):
+def raw2outputs(raw, z_vals, dists, white_bkgd=False, raw_noise_std=0):
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [N, N_rays, N_samples, 4]. Prediction from model.
@@ -130,17 +131,17 @@ def raw2outputs(raw, z_vals, dists, white_bkgd=False):
 
     device = z_vals.device
 
-    rgb = raw[..., :3] # [N, N_rays, N_samples, 3] rgb for each sample point along the ray
+    rgb = torch.sigmoid(raw[...,:3]) # [N, N_rays, N_samples, 3] rgb for each sample point along the ray
 
     # Add noise to model's predictions for density. Can be used to
     # regularize network during training (prevents floater artifacts).
-    # noise = 0.
-    # if raw_noise_std > 0.:
-    #     noise = tf.random.normal(raw[..., 3].shape) * raw_noise_std
-
+    noise = 0.
+    if raw_noise_std > 0.:
+        noise = torch.randn(raw[..., 3].shape, device=device) * raw_noise_std
+    opacity = F.relu(raw[..., 3] + noise)
     # Predict density of each sample along each ray. Higher values imply
     # higher likelihood of being absorbed at this point.
-    alpha, weights = raw2alpha(raw[..., 3])  # [N, N_rays, N_samples]
+    alpha, weights = raw2alpha(opacity, dists)  # [N, N_rays, N_samples]
 
     # Computed weighted color of each sample along each ray.
     rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N, N_rays, 3]
@@ -180,20 +181,20 @@ def raw2outputs_blending(raw_dy, raw_rigid, raw_blend_w, z_vals, dists, raw_nois
     """
     device = z_vals.device
 
-    rgb_dy = raw_dy[..., :3] # [N_rays, N_samples, 3]
-    rgb_rigid = raw_rigid[..., :3] # [N_rays, N_samples, 3]
+    rgb_dy = torch.sigmoid(raw_dy[..., :3])  # [N_rays, N_samples, 3]
+    rgb_rigid = torch.sigmoid(raw_rigid[..., :3])  # [N_rays, N_samples, 3]
 
-    # noise = 0.
-    # if raw_noise_std > 0.:
-    #     noise = torch.randn(raw_dy[..., 3].shape) * raw_noise_std
-    # act_fn = F.relu
-    # opacity_dy = act_fn(raw_dy[..., 3] + noise)#.detach() #* raw_blend_w
-    # opacity_rigid = act_fn(raw_rigid[..., 3] + noise)#.detach() #* (1. - raw_blend_w)
+    noise = 0.
+    if raw_noise_std > 0.:
+        noise = torch.randn(raw_dy[..., 3].shape, device=device) * raw_noise_std
+    opacity_dy = F.relu(raw_dy[..., 3] + noise)
+    opacity_rigid = F.relu(raw_rigid[..., 3] + noise)
+
     # NOTE - our opacities already passed an activation function in NeRF. Maybe need to add noise?
 
     # alpha with blending weights
-    alpha_dy = (1. - torch.exp(-raw_dy[..., 3] * dists) ) * raw_blend_w
-    alpha_rig = (1. - torch.exp(-raw_rigid[..., 3] * dists)) * (1. - raw_blend_w)
+    alpha_dy = (1. - torch.exp(-opacity_dy * dists) ) * raw_blend_w
+    alpha_rig = (1. - torch.exp(-opacity_rigid * dists)) * (1. - raw_blend_w)
 
     Ts = torch.cumprod(torch.cat([torch.ones((*alpha_dy.shape[:2], 1), device=device),
                                   (1. - alpha_dy) * (1. - alpha_rig)  + 1e-10], -1), -1)[..., :-1]
@@ -209,7 +210,7 @@ def raw2outputs_blending(raw_dy, raw_rigid, raw_blend_w, z_vals, dists, raw_nois
     depth_map = torch.sum(weights_mix * z_vals, -1)
 
     # compute dynamic depth only
-    alpha_fg = 1. - torch.exp(-raw_dy[..., 3] * dists)
+    alpha_fg = 1. - torch.exp(-opacity_dy * dists)
     weights_fg = alpha_fg * torch.cumprod(torch.cat([torch.ones((*alpha_fg.shape[:2], 1), device=device),
                                                                  1.-alpha_fg + 1e-10], -1), -1)[..., :-1]
     depth_map_fg = torch.sum(weights_fg * z_vals, -1)
@@ -322,7 +323,7 @@ def prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
 def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                   dists, cos_angle, volume_feature=None, imgs=None, img_feat=None,
                   network_fn=None, embedding_pts=None, embedding_dir=None,
-                  time_codes=None, white_bkgd=False, scene_flow=False):
+                  time_codes=None, white_bkgd=False, scene_flow=False, raw_noise_std=0):
     """Render static NeRF (classic NeRF)
 
     Input:
@@ -358,7 +359,8 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
 
     rgb_map, disp_map, acc_map, weights, depth_map, alpha = raw2outputs(raw_rgba,
                                                                         depth_candidates,
-                                                                        dists, white_bkgd)
+                                                                        dists, white_bkgd,
+                                                                        raw_noise_std)
 
     ret = {'rgb_map': rgb_map,
            'depth_map': depth_map,
@@ -376,7 +378,8 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
 def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                    dists, cos_angle, raw_rgba, raw_blend_w, ref_frame_idx, num_frames,
                    chain_bwd, chain_5frames, volume_feature=None, imgs=None, img_feat=None,
-                   network_fn=None, embedding_pts=None, embedding_dir=None, val=False):
+                   network_fn=None, embedding_pts=None, embedding_dir=None, val=False,
+                   raw_noise_std=0):
     """Render dynamic NeRF (Neural Scene Flow Fields https://github.com/zhengqili/Neural-Scene-Flow-Fields)
 
     Input:
@@ -427,7 +430,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     rgb_map_ref, depth_map_ref, \
     rgb_map_ref_dy, depth_map_ref_dy, \
     weights_ref_dy, weights_ref_dd = raw2outputs_blending(raw_rgba_ref, raw_rgba, raw_blend_w,
-                                                          depth_candidates, dists, 0)
+                                                          depth_candidates, dists, raw_noise_std)
 
     # Blended weights (static w + dynamic w)
     weights_map_dd = torch.sum(weights_ref_dd, -1).detach()
@@ -472,7 +475,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     ret['raw_sf_prev2ref'] = raw_sf_prev2ref
 
     # render from t - 1
-    rgb_map_prev_dy, _, _, weights_prev_dy, _, _ = raw2outputs(raw_rgba_prev, depth_candidates, dists)
+    rgb_map_prev_dy, _, _, weights_prev_dy, _, _ = raw2outputs(raw_rgba_prev, depth_candidates,
+                                                               dists, raw_noise_std)
     ret['rgb_map_prev_dy'] = rgb_map_prev_dy
 
     #######################
@@ -498,7 +502,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     ret['raw_sf_post2ref'] = raw_sf_post2ref
 
     # render from t + 1
-    rgb_map_post_dy, _, _, weights_post_dy, _, _ = raw2outputs(raw_rgba_post, depth_candidates, dists)
+    rgb_map_post_dy, _, _, weights_post_dy, _, _ = raw2outputs(raw_rgba_post, depth_candidates,
+                                                               dists, raw_noise_std)
     ret['rgb_map_post_dy'] = rgb_map_post_dy
 
     ######################
@@ -534,7 +539,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
             # render from t - 2
             rgb_map_prevprev_dy, _, _, weights_prevprev_dy, _, _ = raw2outputs(raw_rgba_prevprev,
                                                                                depth_candidates,
-                                                                               dists)
+                                                                               dists, raw_noise_std)
             ret['rgb_map_pp_dy'] = rgb_map_prevprev_dy
         ###############################
 
@@ -562,7 +567,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
             # render from t + 2
             rgb_map_postpost_dy, _, _, weights_postpost_dy, _, _ = raw2outputs(raw_rgba_postpost,
                                                                                 depth_candidates,
-                                                                                dists)
+                                                                                dists, raw_noise_std)
             ret['rgb_map_pp_dy'] = rgb_map_postpost_dy
         #######################
     return ret
@@ -574,7 +579,8 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
               imgs=None, img_feat=None, neighbour_frames=None, network_fn=None, network_fn_dy=None,
               embedding_pts=None, embedding_xyzt=None, embedding_dir=None,
               chain_bwd=False, chain_5frames=False, ref_frame_idx=None, num_frames=None,
-              time_codes=None, white_bkgd=False, scene_flow=False, val=False):
+              time_codes=None, white_bkgd=False, scene_flow=False, val=False,
+              raw_noise_std=0):
     """
     rays_dir: [N, N_rays, 3] (e.g. [N,1024,3])
     """
@@ -602,7 +608,7 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                         imgs=imgs, img_feat=img_feat, network_fn=network_fn,
                         embedding_pts=embedding_pts, embedding_dir=embedding_dir,
                         time_codes=time_codes, white_bkgd=white_bkgd,
-                        scene_flow=scene_flow)
+                        scene_flow=scene_flow, raw_noise_std=raw_noise_std)
 
     if scene_flow:
         ret_dy = render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates,
@@ -611,7 +617,7 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
                                 volume_feature=volume_feature_dynamic, imgs=neighbour_frames,
                                 img_feat=img_feat, network_fn=network_fn_dy,
                                 embedding_pts=embedding_xyzt, embedding_dir=embedding_dir,
-                                val=val)
+                                val=val, raw_noise_std=raw_noise_std)
         ret.update(ret_dy)
 
     return ret

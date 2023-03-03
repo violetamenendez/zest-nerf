@@ -22,6 +22,7 @@ img_w = 512
 use_mvs = True
 pad = 24 # For MVS with multiple cameras, to be able to warp the volume
 num_keyframes = 10
+raw_noise_std = 1e0
 
 # Network
 use_viewdirs = True

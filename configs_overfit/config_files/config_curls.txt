@@ -19,6 +19,7 @@ use_motion_mask = True
 pad = 0 # For MVS with multiple cameras, to be able to warp the volume
 img_h = 480
 img_w = 360
+raw_noise_std = 1e0
 
 # Network
 use_viewdirs = True

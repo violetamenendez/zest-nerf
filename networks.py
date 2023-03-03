@@ -184,15 +184,15 @@ class Renderer(nn.Module):
         if self.predict_sceneflow:
             if self.static:
                 # Static NeRF
-                blend_w = F.sigmoid(self.w_linear(pts)) # blending weights
+                blend_w = torch.sigmoid(self.w_linear(pts)) # blending weights
             else:
                 # Dynamic NeRF
-                sf = F.tanh(self.sf_linear(pts)) # scene flow
-                prob = F.sigmoid(self.prob_linear(pts)) # confidence
+                sf = torch.tanh(self.sf_linear(pts)) # scene flow
+                prob = torch.sigmoid(self.prob_linear(pts)) # confidence
 
         if self.use_viewdirs:
             # Alpha depends only on 3D points
-            alpha = torch.relu(self.alpha_linear(pts))
+            alpha = self.alpha_linear(pts)
 
             # Concatenate point features and viewing direction (to get colour)
             feature = self.feature_linear(pts)
@@ -204,7 +204,7 @@ class Renderer(nn.Module):
                 pts = F.relu(pts)
 
             # Colour depends on point features and viewing direction
-            rgb = torch.sigmoid(self.rgb_linear(pts))
+            rgb = self.rgb_linear(pts)
             outputs = torch.cat([rgb, alpha], -1)
         else:
             outputs = self.output_linear(pts) # RGBA
@@ -567,7 +567,8 @@ class DyMVSNeRF_G(nn.Module):
                         chain_bwd=self.chain_bwd,
                         chain_5frames=chain_5frames,
                         ref_frame_idx=ref_frame_idx,
-                        num_frames=num_frames)
+                        num_frames=num_frames,
+                        raw_noise_std=self.args.raw_noise_std)
 
         ret['target_s'] = target_s
         ret['depth_gt'] = rays_depth_gt
