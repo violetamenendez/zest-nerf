@@ -296,7 +296,7 @@ class MVSNeRFSystem(LightningModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
                           shuffle=True,
-                          num_workers=0,
+                          num_workers=4,
                           batch_size=1, #self.hparams.batch_size,
                           # NOTE: batch refers to number of images,
                           # but NeRF in practice takes ray batches
@@ -305,7 +305,7 @@ class MVSNeRFSystem(LightningModule):
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           shuffle=False,
-                          num_workers=0,
+                          num_workers=4,
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
 
