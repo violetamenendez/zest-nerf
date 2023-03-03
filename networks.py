@@ -398,8 +398,8 @@ class MVSNeRF_G(nn.Module):
         pad = 0
         if self.encoding_net is not None:
             pad = self.args.pad
-            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :3],
-                                                                       proj_mats[:, :3],
+            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :-1],
+                                                                       proj_mats[:, :-1],
                                                                        near_fars[0,0],
                                                                        pad=pad,
                                                                        vis_test=self.args.vis_cnn,
@@ -435,7 +435,8 @@ class MVSNeRF_G(nn.Module):
 
 class DyMVSNeRF_G(nn.Module):
     def __init__(self, args, decay_iteration, nerf_dynamic, nerf_static,
-                 encoding, embedding_pts, embedding_xyzt, embedding_dir):
+                 encoding, encoding_dy, embedding_pts, embedding_xyzt,
+                 embedding_dir):
         """
         Generator using MVSNeRF
         """
@@ -445,6 +446,7 @@ class DyMVSNeRF_G(nn.Module):
         self.nerf_dynamic = nerf_dynamic
         self.nerf_static = nerf_static
         self.encoding_net = encoding
+        self.encoding_net_dy = encoding_dy
         self.embedding_pts = embedding_pts
         self.embedding_xyzt = embedding_xyzt
         self.embedding_dir = embedding_dir
@@ -504,18 +506,33 @@ class DyMVSNeRF_G(nn.Module):
             num_extra_samples = 0
 
 
-        # Neural Encoding Volume generation
-        # imgs -> cost vol -> Enc vol (volume_feature)
-        volume_feature = None
+        # Static Neural Encoding Volume
+        static_env_vol = None
         pad = 0
         if self.encoding_net is not None:
             pad = self.args.pad
-            volume_feature, img_feat, depth_values = self.encoding_net(imgs[:, :-1],
+            static_env_vol, img_feat, depth_values = self.encoding_net(imgs[:, :-1],
                                                                        proj_mats[:, :-1],
                                                                        near_fars[0,0],
                                                                        pad=pad,
                                                                        vis_test=self.args.vis_cnn,
                                                                        test_dir=Path(self.args.save_test))
+        # Dynamic Neural Encoding Volume generation
+        dy_env_vol = None
+        nb_frames = None
+        if self.encoding_net_dy is not None:
+            # Neighbouring frames
+            nb_frames = x['nb_imgs']
+            nb_proj_mats = x['nb_proj_mats']
+
+            pad = self.args.pad
+            dy_env_vol, img_feat, depth_values = self.encoding_net_dy(nb_frames,
+                                                                      nb_proj_mats,
+                                                                      near_fars[0,0],
+                                                                      pad=pad,
+                                                                      vis_test=self.args.vis_cnn,
+                                                                      test_dir=Path(self.args.save_test))
+            nb_frames = self.unpreprocess(nb_frames)
         imgs = self.unpreprocess(imgs) # unnormalise for visualisation
 
         # Ray generation from images and camera positions
@@ -535,9 +552,10 @@ class DyMVSNeRF_G(nn.Module):
                         rays_pts, rays_NDC,
                         depth_candidates,
                         rays_dir,
-                        volume_feature,
-                        imgs[:, :-1],
-                        img_feat=None,
+                        volume_feature_static=static_env_vol,
+                        volume_feature_dynamic=dy_env_vol,
+                        imgs=imgs[:, :-1],
+                        neighbour_frames=nb_frames,
                         network_fn=self.nerf_static,
                         network_fn_dy=self.nerf_dynamic,
                         embedding_pts=self.embedding_pts,
@@ -587,16 +605,33 @@ class DyMVSNeRF_G(nn.Module):
         depths = x['depths']
 
         with torch.no_grad():
-            # Neural Encoding Volume
-            volume_feature = None
+            # Static Neural Encoding Volume
+            static_env_vol = None
             pad = 0
             if self.encoding_net is not None:
                 pad = self.args.pad
                 self.encoding_net.train()
-                volume_feature, _, _ = self.encoding_net(imgs[:, :3],
-                                                         proj_mats[:, :3],
+                static_env_vol, _, _ = self.encoding_net(imgs[:, :-1],
+                                                         proj_mats[:, :-1],
                                                          near_fars[0,0],
                                                          pad=pad)
+            # Dynamic Neural Encoding Volume generation
+            dy_env_vol = None
+            nb_frames = None
+            if self.encoding_net_dy is not None:
+                # Neighbouring frames
+                nb_frames = x['nb_imgs']
+                nb_proj_mats = x['nb_proj_mats']
+
+                pad = self.args.pad
+                self.encoding_net_dy.train()
+                dy_env_vol, _, _ = self.encoding_net_dy(nb_frames,
+                                                        nb_proj_mats,
+                                                        near_fars[0,0],
+                                                        pad=pad,
+                                                        vis_test=self.args.vis_cnn,
+                                                        test_dir=Path(self.args.save_test))
+                nb_frames = self.unpreprocess(nb_frames)
             imgs = self.unpreprocess(imgs) # unnormalise for visualisation
 
             self.args.img_downscale = torch.rand((1,)) * 0.75 + 0.25
@@ -623,9 +658,10 @@ class DyMVSNeRF_G(nn.Module):
                                 rays_pts, rays_NDC,
                                 depth_candidates,
                                 rays_dir,
-                                volume_feature,
-                                imgs[:, :-1],
-                                img_feat=None,
+                                volume_feature_static=static_env_vol,
+                                volume_feature_dynamic=dy_env_vol,
+                                imgs=imgs[:, :-1],
+                                neighbour_frames=nb_frames,
                                 network_fn=self.nerf_static,
                                 network_fn_dy=self.nerf_dynamic,
                                 embedding_pts=self.embedding_pts,
@@ -649,7 +685,7 @@ class DyMVSNeRF_G(nn.Module):
 
                 weights_dd.append(ret['weights_map_dd'].squeeze(0)) # alpha-comp for dynamic weights
 
-        del rays_NDC, rays_dir, rays_pts, volume_feature
+        del rays_NDC, rays_dir, rays_pts, static_env_vol
 
         return imgs, rgbs_blend, depths_blend, rgbs_rig, depths_rig, \
             rgbs_dy, depths_dy, weights_dd

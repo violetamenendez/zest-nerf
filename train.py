@@ -67,6 +67,7 @@ class MVSNeRFSystem(LightningModule):
         # From MVSSystem
         if self.hparams.train_sceneflow:
             self.hparams.feat_dim = 8+self.hparams.num_keyframes*4
+            self.hparams.feat_dim_dy = 8 + 4 * 4 # 4 neighbouring frames
         else:
             self.hparams.feat_dim = 8+self.hparams.num_input*4
         self.idx = 0 # validation step counter
@@ -120,8 +121,8 @@ class MVSNeRFSystem(LightningModule):
             # NSFF dynamic + static NeRFs. See https://www.cs.cornell.edu/~zl548/NSFF/
             self.nerf_dynamic = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
                  input_ch_pts=self.input_ch_dy, output_ch=self.output_ch, skips=skips,
-                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim, net_type=self.hparams.net_type,
-                 sceneflow=True, static=False, use_mvs=False)
+                 input_ch_views=self.input_ch_views, input_ch_feat=self.hparams.feat_dim_dy, net_type=self.hparams.net_type,
+                 sceneflow=True, static=False, use_mvs=self.hparams.use_mvs_dy)
             self.models += [self.nerf_dynamic]
 
             self.nerf_static = MVSNeRF(D=self.hparams.netdepth, W=self.hparams.netwidth,
@@ -150,13 +151,18 @@ class MVSNeRFSystem(LightningModule):
         if use_mvs:
             self.encoding_net = MVSNet()
             self.models += [self.encoding_net]
+        self.encoding_net_dy = None
+        if self.hparams.use_mvs_dy:
+            self.encoding_net_dy = MVSNet()
+            self.models += [self.encoding_net_dy]
 
         # Define static or dynamic Generator: Enc volume -> NeRF -> Vol Rendering
         if self.hparams.train_sceneflow:
             self.generator = DyMVSNeRF_G(self.hparams, self.decay_iteration,
                                          self.nerf_dynamic, self.nerf_static,
-                                         self.encoding_net, self.embedding_xyz,
-                                         self.embedding_xyzt, self.embedding_dir)
+                                         self.encoding_net, self.encoding_net_dy,
+                                         self.embedding_xyz, self.embedding_xyzt,
+                                         self.embedding_dir)
         else:
             self.generator = MVSNeRF_G(self.hparams,
                                        self.nerf_coarse, self.encoding_net,
@@ -201,6 +207,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'nsff':
             kwargs['num_keyframes'] = self.hparams.num_keyframes
             kwargs['use_mvs'] = self.hparams.use_mvs
+            kwargs['use_mvs_dy'] = self.hparams.use_mvs_dy
             kwargs['img_h'] = self.hparams.img_h
             kwargs['img_w'] = self.hparams.img_w
         self.train_dataset = dataset(self.hparams.datadir,
@@ -218,6 +225,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'nsff':
             kwargs['num_keyframes'] = self.hparams.num_keyframes
             kwargs['use_mvs'] = self.hparams.use_mvs
+            kwargs['use_mvs_dy'] = self.hparams.use_mvs_dy
             kwargs['img_h'] = self.hparams.img_h
             kwargs['img_w'] = self.hparams.img_w
         self.val_dataset = dataset(self.hparams.datadir,
@@ -236,6 +244,7 @@ class MVSNeRFSystem(LightningModule):
         if self.hparams.dataset_name == 'nsff':
             kwargs['num_keyframes'] = self.hparams.num_keyframes
             kwargs['use_mvs'] = self.hparams.use_mvs
+            kwargs['use_mvs_dy'] = self.hparams.use_mvs_dy
             kwargs['img_h'] = self.hparams.img_h
             kwargs['img_w'] = self.hparams.img_w
         self.test_dataset = dataset(self.hparams.datadir,
@@ -841,8 +850,8 @@ class MVSNeRFSystem(LightningModule):
                 # Encoding volume
                 pad = self.hparams.pad
                 self.encoding_net.train()
-                volume_feature, img_feat, _ = self.encoding_net(imgs[:, :3],
-                                                                proj_mats[:, :3],
+                volume_feature, img_feat, _ = self.encoding_net(imgs[:, :-1],
+                                                                proj_mats[:, :-1],
                                                                 near_fars[0,0],
                                                                 pad=pad)
                 logging.info("volume_feature "+str(volume_feature.shape))

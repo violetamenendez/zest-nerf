@@ -243,7 +243,7 @@ def run_network(network_fn, chunk, pts, alpha_only=False):
 
 
 def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
-                volume_feature=None, imgs=None, img_feat=None,
+                volume_feature=None, imgs=None, img_feat=None, feat_dim=0,
                 embedding_pts=None, embedding_dir=None,
                 time_codes=None):
     """Prepares points to be fed to the network.
@@ -276,7 +276,7 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     input_feat = None
     if volume_feature is not None:
         # sample volume feature at ray points
-        input_feat = gen_pts_feats(imgs, volume_feature, rays_pts, data_mvs, rays_ndc[..., :3], args.feat_dim, \
+        input_feat = gen_pts_feats(imgs, volume_feature, rays_pts, data_mvs, rays_ndc[..., :3], feat_dim, \
                                    img_feat, args.img_downscale, args.use_color_volume, args.net_type)
         if input_feat is not None:
             pts = torch.cat((pts, input_feat), dim=-1)
@@ -313,7 +313,7 @@ def prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     img_idx_rep = torch.ones_like(rays_ndc[..., 0:1], device=device) * frame_idx
     raw_pts = torch.cat([rays_ndc, img_idx_rep], -1)
     pts, _, _ = prepare_pts(args, data_mvs, rays_pts, raw_pts, rays_dir, cos_angle,
-                            volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
+                            volume_feature=volume_feature, imgs=imgs, img_feat=img_feat, feat_dim=args.feat_dim_dy,
                             embedding_pts=embedding_pts, embedding_dir=embedding_dir)
     return raw_pts, pts
 
@@ -345,7 +345,7 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
 
     # Prepare input to the network
     pts, alpha_only, input_feat = prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
-                                  volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
+                                  volume_feature=volume_feature, imgs=imgs, img_feat=img_feat, feat_dim=args.feat_dim,
                                   embedding_pts=embedding_pts, embedding_dir=embedding_dir,
                                   time_codes=time_codes)
 
@@ -410,7 +410,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     # Prepare temporal pts for Dynamic NeRF
     raw_pts_ref, pts_ref = prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc,
                                                rays_dir, cos_angle, ref_frame_idx,
-                                               volume_feature=None,
+                                               volume_feature=volume_feature,
                                                imgs=imgs, img_feat=img_feat,
                                                embedding_pts=embedding_pts,
                                                embedding_dir=embedding_dir)
@@ -458,7 +458,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     prev_rays_ndc = rays_ndc + raw_sf_ref2prev
     raw_pts_prev, pts_prev = prepare_dynamic_pts(args, data_mvs, rays_pts, prev_rays_ndc,
                                                  rays_dir, cos_angle, prev_frame_idx,
-                                                 volume_feature=None,
+                                                 volume_feature=volume_feature,
                                                  imgs=imgs, img_feat=img_feat,
                                                  embedding_pts=embedding_pts,
                                                  embedding_dir=embedding_dir)
@@ -484,7 +484,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     post_rays_ndc = rays_ndc + raw_sf_ref2post
     raw_pts_post, pts_post = prepare_dynamic_pts(args, data_mvs, rays_pts, post_rays_ndc,
                                                  rays_dir, cos_angle, post_frame_idx,
-                                                 volume_feature=None,
+                                                 volume_feature=volume_feature,
                                                  imgs=imgs, img_feat=img_feat,
                                                  embedding_pts=embedding_pts,
                                                  embedding_dir=embedding_dir)
@@ -521,7 +521,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         prevprev_rays_ndc = raw_pts_prev[..., :3] + raw_sf_prev2prevprev
         raw_pts_prevprev, pts_prevprev = prepare_dynamic_pts(args, data_mvs, rays_pts, prevprev_rays_ndc,
                                                              rays_dir, cos_angle, prevprev_frame_idx,
-                                                             volume_feature=None,
+                                                             volume_feature=volume_feature,
                                                              imgs=imgs, img_feat=img_feat,
                                                              embedding_pts=embedding_pts,
                                                              embedding_dir=embedding_dir)
@@ -548,7 +548,7 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         postpost_rays_ndc = raw_pts_post[..., :3] + raw_sf_post2postpost
         raw_pts_postpost, pts_postpost = prepare_dynamic_pts(args, data_mvs, rays_pts, postpost_rays_ndc,
                                                              rays_dir, cos_angle, postpost_frame_idx,
-                                                             volume_feature=None,
+                                                             volume_feature=volume_feature,
                                                              imgs=imgs, img_feat=img_feat,
                                                              embedding_pts=embedding_pts,
                                                              embedding_dir=embedding_dir)
@@ -570,7 +570,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
 
 
 def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
-              volume_feature=None, imgs=None, img_feat=None, network_fn=None, network_fn_dy=None,
+              volume_feature_static=None, volume_feature_dynamic=None,
+              imgs=None, img_feat=None, neighbour_frames=None, network_fn=None, network_fn_dy=None,
               embedding_pts=None, embedding_xyzt=None, embedding_dir=None,
               chain_bwd=False, chain_5frames=False, ref_frame_idx=None, num_frames=None,
               time_codes=None, white_bkgd=False, scene_flow=False, val=False):
@@ -580,7 +581,7 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
     logging.info("RENDERING")
     logging.info("inputs "+str(rays_pts.shape)+","+str(rays_ndc.shape) \
         +","+str(depth_candidates.shape)+","+str(rays_dir.shape) \
-        +","+str(volume_feature.shape if volume_feature is not None else "None") \
+        +","+str(volume_feature_static.shape if volume_feature_static is not None else "None") \
         +","+str(imgs.shape if imgs is not None else "None") \
         +","+str(img_feat.shape if img_feat is not None else "None") \
         +","+str("network_fn" if network_fn is not None else "None") \
@@ -597,8 +598,8 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
 
     ret = render_static(args, data_mvs, rays_pts, rays_ndc,
                         depth_candidates, rays_dir, dists,
-                        cos_angle, volume_feature=volume_feature, imgs=imgs,
-                        img_feat=img_feat, network_fn=network_fn,
+                        cos_angle, volume_feature=volume_feature_static,
+                        imgs=imgs, img_feat=img_feat, network_fn=network_fn,
                         embedding_pts=embedding_pts, embedding_dir=embedding_dir,
                         time_codes=time_codes, white_bkgd=white_bkgd,
                         scene_flow=scene_flow)
@@ -607,8 +608,9 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
         ret_dy = render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates,
                                 rays_dir, dists, cos_angle,  ret['raw_rgba'], ret['raw_blend_w'],
                                 ref_frame_idx, num_frames, chain_bwd, chain_5frames,
-                                volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
-                                network_fn=network_fn_dy, embedding_pts=embedding_xyzt, embedding_dir=embedding_dir,
+                                volume_feature=volume_feature_dynamic, imgs=neighbour_frames,
+                                img_feat=img_feat, network_fn=network_fn_dy,
+                                embedding_pts=embedding_xyzt, embedding_dir=embedding_dir,
                                 val=val)
         ret.update(ret_dy)
 

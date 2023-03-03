@@ -1,0 +1,41 @@
+### Config for NSFF curl scene
+
+expname = nsff_kid-running_mvs
+
+# Data
+dataset_name = nsff
+datadir = /storage/datasets/NSFF/nvidia_data_full/
+configdir = configs_overfit/ # Directory containing dataset splits
+save_dir = /storage/projects/ganmvsnerf/runs
+finetune_scene = kid-running
+
+# Training
+num_epochs = 6000
+decay_iteration = 30
+train_sceneflow = True
+batch_size = 1024
+num_extra_samples = 512
+use_motion_mask = True
+img_h = 288
+img_w = 512
+# Encoding volume
+use_mvs = True
+use_mvs_dy = True
+pad = 24 # For MVS with multiple cameras, to be able to warp the volume
+num_keyframes = 10
+
+# Network
+use_viewdirs = True
+pts_embedder = True
+dir_embedder = True
+netdepth = 8
+netwidth = 256
+
+# Losses
+lambda_cyc = 1.0
+lambda_sf_reg = 0.1
+lambda_sf_smooth = 0.1
+lambda_blending_reg = 1e-3
+lambda_sf_depth = 0.04
+lambda_optical_flow = 0.02
+with_chain_loss = True

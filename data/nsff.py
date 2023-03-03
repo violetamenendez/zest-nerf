@@ -16,7 +16,8 @@ class NSFFDataset(Dataset):
     def __init__(self, root_dir, config_dir, split='train',
                  downSample=1.0, max_len=-1,
                  scene=None, closest_views=False,
-                 use_mvs=False, num_keyframes=10,
+                 use_mvs=False, use_mvs_dy=False,
+                 num_keyframes=10,
                  img_h=288, img_w=544):
         """
         Neural Scene Flow Fields dataset https://github.com/zhengqili/Neural-Scene-Flow-Fields
@@ -25,6 +26,7 @@ class NSFFDataset(Dataset):
         self.config_dir = Path(config_dir)
         self.split = split
         self.use_mvs = use_mvs
+        self.use_mvs_dy = use_mvs_dy
         self.num_keyframes = num_keyframes
         self.downSample = downSample
         self.img_wh = (int(img_w*downSample),int(img_h*downSample))
@@ -187,9 +189,6 @@ class NSFFDataset(Dataset):
         # First neighbours
         first_nb_ids = [max(target_frame - 1, 0), # +-1 frames
                         min(target_frame + 1, int(num_frames) - 1)]
-        # Second neighbours
-        second_nb_ids = [max(target_frame - 2, 0), # +-2 frames
-                         min(target_frame + 2, int(num_frames) - 1)]
 
 
         imgs, disps, proj_mats = [], [], []
@@ -199,43 +198,36 @@ class NSFFDataset(Dataset):
         near_fars = []
         near_far_source = torch.Tensor([self.bounds[scene][view_ids].min()*0.8, self.bounds[scene][view_ids].max()*1.2])
 
-        # Matrices for first neighbours +-1 frames
-        fnb_imgs, fnb_proj_mats = [], []
-        fnb_intr, fnb_c2ws, fnb_w2cs = [],[],[]
+        # Poses for first neighbours +-1
+        fnb_w2cs = []
         for i, vid in enumerate(first_nb_ids):
-            fnb_intr.append(self.intrinsics[scene][vid])
             fnb_w2cs.append(self.world2cams[scene][vid])
-            fnb_c2ws.append(self.cam2worlds[scene][vid])
 
-            # Is this necessary for neighbours?
-            proj_mat_ls = self.proj_mats[scene][vid]
-            ref_proj_inv = np.linalg.inv(proj_mat_ls)
-            fnb_proj_mats += [proj_mat_ls @ ref_proj_inv]
+        if self.use_mvs_dy:
+            # Second neighbours
+            neighbourgs = [max(target_frame - 2, 0),
+                           max(target_frame - 1, 0),
+                           min(target_frame + 1, int(num_frames) - 1),
+                           min(target_frame + 2, int(num_frames) - 1)]
 
-            # Get image
-            img = Image.open(self.image_paths[scene][vid]).convert('RGB')
-            img = img.resize(self.img_wh, Image.LANCZOS)
-            img = self.transform(img)  # (3, h, w)
-            fnb_imgs.append(self.src_transform(img))
+            # Matrices for  neighbours +-2 frames
+            nb_imgs, nb_proj_mats = [], []
+            nb_intr, nb_c2ws, nb_w2cs = [],[],[]
+            for i, vid in enumerate(neighbourgs):
+                nb_intr.append(self.intrinsics[scene][vid])
+                nb_w2cs.append(self.world2cams[scene][vid])
+                nb_c2ws.append(self.cam2worlds[scene][vid])
 
-        # Matrices for second neighbours +-2 frames
-        snb_imgs, snb_proj_mats = [], []
-        snb_intr, snb_c2ws, snb_w2cs = [],[],[]
-        for i, vid in enumerate(first_nb_ids):
-            snb_intr.append(self.intrinsics[scene][vid])
-            snb_w2cs.append(self.world2cams[scene][vid])
-            snb_c2ws.append(self.cam2worlds[scene][vid])
+                # Is this necessary for neighbours?
+                proj_mat_ls = self.proj_mats[scene][vid]
+                ref_proj_inv = np.linalg.inv(proj_mat_ls)
+                nb_proj_mats += [proj_mat_ls @ ref_proj_inv]
 
-            # Is this necessary for neighbours?
-            proj_mat_ls = self.proj_mats[scene][vid]
-            ref_proj_inv = np.linalg.inv(proj_mat_ls)
-            snb_proj_mats += [proj_mat_ls @ ref_proj_inv]
-
-            # Get image
-            img = Image.open(self.image_paths[scene][vid]).convert('RGB')
-            img = img.resize(self.img_wh, Image.LANCZOS)
-            img = self.transform(img)  # (3, h, w)
-            snb_imgs.append(self.src_transform(img))
+                # Get image
+                img = Image.open(self.image_paths[scene][vid]).convert('RGB')
+                img = img.resize(self.img_wh, Image.LANCZOS)
+                img = self.transform(img)  # (3, h, w)
+                nb_imgs.append(self.src_transform(img))
 
         # Matrices for reference view
         for i, vid in enumerate(view_ids):
@@ -314,17 +306,14 @@ class NSFFDataset(Dataset):
         sample['total_frames'] = num_frames
 
         # First neighbours
-        sample['fnb_imgs'] = torch.stack(fnb_imgs).float()  # (V, 3, H, W)
         sample['fnb_w2cs'] = torch.stack(fnb_w2cs).float()  # (V, 4, 4)
-        sample['fnb_c2ws'] = torch.stack(fnb_c2ws).float()  # (V, 4, 4)
-        sample['fnb_intr'] = torch.stack(fnb_intr).float()  # (V, 3, 3)
-        sample['fnb_proj_mats'] = torch.from_numpy(np.stack(fnb_proj_mats)[:,:3]).float() # (V, 3, 4)
 
-        # Second neighbours
-        sample['snb_imgs'] = torch.stack(snb_imgs).float()  # (V, 3, H, W)
-        sample['snb_w2cs'] = torch.stack(snb_w2cs).float()  # (V, 4, 4)
-        sample['snb_c2ws'] = torch.stack(snb_c2ws).float()  # (V, 4, 4)
-        sample['snb_intr'] = torch.stack(snb_intr).float()  # (V, 3, 3)
-        sample['snb_proj_mats'] = torch.from_numpy(np.stack(snb_proj_mats)[:,:3]).float() # (V, 3, 4)
+        if self.use_mvs_dy:
+            # Neighbours
+            sample['nb_imgs'] = torch.stack(nb_imgs).float()  # (V, 3, H, W)
+            sample['nb_w2cs'] = torch.stack(nb_w2cs).float()  # (V, 4, 4)
+            sample['nb_c2ws'] = torch.stack(nb_c2ws).float()  # (V, 4, 4)
+            sample['nb_intr'] = torch.stack(nb_intr).float()  # (V, 3, 3)
+            sample['nb_proj_mats'] = torch.from_numpy(np.stack(nb_proj_mats)[:,:3]).float() # (V, 3, 4)
 
         return sample
