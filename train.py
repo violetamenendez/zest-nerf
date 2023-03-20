@@ -476,7 +476,7 @@ class MVSNeRFSystem(LightningModule):
         sf_sp_loss += compute_sf_smooth_loss(raw_pts_ref,
                                              raw_pts_prev,
                                              H, W, focal)
-        self.log('sf_sm_loss', self.hparams.lambda_sf_smooth * sf_sp_loss)
+        self.log('sf_sp_loss', self.hparams.lambda_sf_smooth * sf_sp_loss)
 
         ###########################################
         # Scene flow temporal smoothness - l_temp #
