@@ -328,13 +328,13 @@ class MVSNeRFSystem(LightningModule):
 
         return (data - mean) / std
 
-    def forward(self, data_mvs):
+    def forward(self, batch):
         if self.time_codes is not None:
             print("training forward has time codes", self.time_codes.shape)
 
-        time_code = self.time_codes[data_mvs['keyframe_id']].to(self.device) if self.time_codes is not None else None
+        time_code = self.time_codes[batch['keyframe_id']].to(self.device) if self.time_codes is not None else None
 
-        return self.generator(data_mvs, self.global_step, time_codes=time_code)
+        return self.generator(batch, self.global_step, time_codes=time_code)
 
     def train_sf_step(self, batch, results):
         """Compute all losses for the Scene Flow model"""
@@ -833,6 +833,8 @@ class MVSNeRFSystem(LightningModule):
         near_fars = batch['near_fars']
         depths = batch['depths_h']
         time_code = self.time_codes[batch['keyframe_id']].to(self.device) if self.time_codes is not None else None
+        im_cam_mat ={'w2cs': batch['w2cs'],
+                     'intrinsics': batch['intrinsics']}
 
         N, V, C, H, W = imgs.shape
         logging.info("image batch: imgs "+str(imgs.shape))
@@ -866,13 +868,14 @@ class MVSNeRFSystem(LightningModule):
                                chunk=self.hparams.chunk, idx=chunk_idx, val=True,
                                isRandom=False)
 
-                ret =  rendering(self.hparams, batch,
+                ret =  rendering(self.hparams,
                                 rays_pts, rays_NDC,
                                 depth_candidates,
                                 rays_dir,
-                                volume_feature,
-                                imgs[:, :-1],
+                                volume_feature_static=volume_feature,
+                                imgs=imgs[:, :-1],
                                 img_feat=None,
+                                im_cam_mat=im_cam_mat,
                                 network_fn=self.nerf_coarse,
                                 embedding_pts=self.embedding_xyz,
                                 embedding_dir=self.embedding_dir,

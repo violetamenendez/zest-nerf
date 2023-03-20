@@ -458,7 +458,7 @@ def index_point_feature(volume_feature, ray_coordinate_ref):
     logging.info("outputs "+str(features.shape))
     return features
 
-def build_color_volume(point_samples, data_mvs, imgs, img_feat=None, downscale=1.0, with_mask=False):
+def build_color_volume(point_samples, poses, imgs, img_feat=None, downscale=1.0, with_mask=False):
     '''
     point_samples: [N N_ray N_sample 3]
     imgs: [N V 3 H W]
@@ -481,7 +481,7 @@ def build_color_volume(point_samples, data_mvs, imgs, img_feat=None, downscale=1
 
     for idx in range(V):
 
-        w2c_ref, intrinsic_ref = data_mvs['w2cs'][:,idx,:,:], data_mvs['intrinsics'][:,idx,:,:].clone()
+        w2c_ref, intrinsic_ref = poses['w2cs'][:,idx,:,:], poses['intrinsics'][:,idx,:,:].clone()
 
         point_samples_pixel = get_ndc_coordinate(w2c_ref, intrinsic_ref, point_samples, inv_scale) # [N, N_rays, N_samples, 3]
         grid = point_samples_pixel[...,:2]*2.0-1.0 # [N, N_rays, N_samples, 2]

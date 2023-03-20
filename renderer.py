@@ -243,10 +243,9 @@ def run_network(network_fn, chunk, pts, alpha_only=False):
 
 
 
-def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
+def prepare_pts(args, rays_pts, rays_ndc, rays_dir, cos_angle, cam_mat=None,
                 volume_feature=None, imgs=None, img_feat=None, feat_dim=0,
-                embedding_pts=None, embedding_dir=None,
-                time_codes=None):
+                embedding_pts=None, embedding_dir=None, time_codes=None):
     """Prepares points to be fed to the network.
     Input:
     Output:
@@ -254,8 +253,8 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     """
 
     # using viewing direction
-    if data_mvs is not None:
-        w2ref = data_mvs['w2cs'][:,0,:,:]
+    if cam_mat is not None:
+        w2ref = cam_mat['w2cs'][:,0,:,:]
         angle = gen_dir_feature(w2ref, rays_dir/cos_angle)  # view dir feature
     else:
         angle = rays_dir/cos_angle # [N, N_rays, 1]
@@ -277,7 +276,7 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     input_feat = None
     if volume_feature is not None:
         # sample volume feature at ray points
-        input_feat = gen_pts_feats(imgs, volume_feature, rays_pts, data_mvs, rays_ndc[..., :3], feat_dim, \
+        input_feat = gen_pts_feats(imgs, volume_feature, rays_pts, cam_mat, rays_ndc[..., :3], feat_dim, \
                                    img_feat, args.img_downscale, args.use_color_volume, args.net_type)
         if input_feat is not None:
             pts = torch.cat((pts, input_feat), dim=-1)
@@ -298,8 +297,8 @@ def prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     return pts, alpha_only, input_feat
 
 
-def prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
-                        frame_idx, volume_feature=None, imgs=None, img_feat=None,
+def prepare_dynamic_pts(args, rays_pts, rays_ndc, rays_dir, cos_angle, frame_idx,
+                        volume_feature=None, imgs=None, img_feat=None, cam_mat=None,
                         embedding_pts=None, embedding_dir=None):
     """Prepares points to be fed to the network.
     Input:
@@ -313,22 +312,21 @@ def prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
     # rays_ndc[..., 0].shape torch.Size([1, 1024, 128])
     img_idx_rep = torch.ones_like(rays_ndc[..., 0:1], device=device) * frame_idx
     raw_pts = torch.cat([rays_ndc, img_idx_rep], -1)
-    pts, _, _ = prepare_pts(args, data_mvs, rays_pts, raw_pts, rays_dir, cos_angle,
+    pts, _, _ = prepare_pts(args, rays_pts, raw_pts, rays_dir, cos_angle, cam_mat=cam_mat,
                             volume_feature=volume_feature, imgs=imgs, img_feat=img_feat, feat_dim=args.feat_dim_dy,
                             embedding_pts=embedding_pts, embedding_dir=embedding_dir)
     return raw_pts, pts
 
 
 
-def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
-                  dists, cos_angle, volume_feature=None, imgs=None, img_feat=None,
+def render_static(args, rays_pts, rays_ndc, depth_candidates, rays_dir, dists, cos_angle,
+                  volume_feature=None, imgs=None, img_feat=None, cam_mat=None,
                   network_fn=None, embedding_pts=None, embedding_dir=None,
                   time_codes=None, white_bkgd=False, scene_flow=False, raw_noise_std=0):
     """Render static NeRF (classic NeRF)
 
     Input:
         args: hyperparams.
-        data_mvs: dict containing mvs information, pose, extrinsic, intrinsics...
         rays_pts: [N, N_rays, 3] point samples. Used for sampling encoding volume.
         rays_ndc: [N, N_rays, 3] points in normalised device coordinate system to feed NeRF.
         depth_candidates: [N_rays, N_samples] distance between each integration point along a ray.
@@ -336,6 +334,7 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
         volume_feature: encoding volume.
         imgs:[N V 3 H W] input images
         img_feat: img features
+        cam_mat: dict containing pose information, camera matrices w2cs and intrinsics
         network_fn: NeRF function
         embedding_pts: embedding function for points
         embedding_dir: embedding function for directions
@@ -345,8 +344,9 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
     """
 
     # Prepare input to the network
-    pts, alpha_only, input_feat = prepare_pts(args, data_mvs, rays_pts, rays_ndc, rays_dir, cos_angle,
-                                  volume_feature=volume_feature, imgs=imgs, img_feat=img_feat, feat_dim=args.feat_dim,
+    pts, alpha_only, input_feat = prepare_pts(args, rays_pts, rays_ndc, rays_dir, cos_angle,
+                                  volume_feature=volume_feature, imgs=imgs, img_feat=img_feat,
+                                  cam_mat=cam_mat, feat_dim=args.feat_dim,
                                   embedding_pts=embedding_pts, embedding_dir=embedding_dir,
                                   time_codes=time_codes)
 
@@ -375,16 +375,16 @@ def render_static(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir
 
 
 
-def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
-                   dists, cos_angle, raw_rgba, raw_blend_w, ref_frame_idx, num_frames,
-                   chain_bwd, chain_5frames, volume_feature=None, imgs=None, img_feat=None,
+def render_dynamic(args, rays_pts, rays_ndc, depth_candidates, rays_dir, dists, cos_angle,
+                   raw_rgba, raw_blend_w, ref_frame_idx, num_frames, chain_bwd, chain_5frames,
+                   volume_feature=None, imgs=None, img_feat=None, cam_mat=None,
                    network_fn=None, embedding_pts=None, embedding_dir=None, val=False,
                    raw_noise_std=0):
     """Render dynamic NeRF (Neural Scene Flow Fields https://github.com/zhengqili/Neural-Scene-Flow-Fields)
 
     Input:
         args: hyperparams.
-        data_mvs: dict containing mvs information, pose, extrinsic, intrinsics...
+        cam_mat: dict containing pose information, camera matrices w2cs and intrinsics
         rays_pts: [N, N_rays, 3] point samples. Used for sampling encoding volume.
         rays_ndc: [N, N_rays, 3] points in normalised device coordinate system to feed NeRF.
         depth_candidates: [N_rays, N_samples] distance between each integration point along a ray.
@@ -411,8 +411,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     #####################
 
     # Prepare temporal pts for Dynamic NeRF
-    raw_pts_ref, pts_ref = prepare_dynamic_pts(args, data_mvs, rays_pts, rays_ndc,
-                                               rays_dir, cos_angle, ref_frame_idx,
+    raw_pts_ref, pts_ref = prepare_dynamic_pts(args, rays_pts, rays_ndc, rays_dir,
+                                               cos_angle, ref_frame_idx, cam_mat=cam_mat,
                                                volume_feature=volume_feature,
                                                imgs=imgs, img_feat=img_feat,
                                                embedding_pts=embedding_pts,
@@ -459,8 +459,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     # Points for previous frame according to the estimated scene flow + time
     prev_frame_idx = ref_frame_idx - 1./num_frames * 2.
     prev_rays_ndc = rays_ndc + raw_sf_ref2prev
-    raw_pts_prev, pts_prev = prepare_dynamic_pts(args, data_mvs, rays_pts, prev_rays_ndc,
-                                                 rays_dir, cos_angle, prev_frame_idx,
+    raw_pts_prev, pts_prev = prepare_dynamic_pts(args, rays_pts, prev_rays_ndc, rays_dir,
+                                                 cos_angle, prev_frame_idx, cam_mat=cam_mat,
                                                  volume_feature=volume_feature,
                                                  imgs=imgs, img_feat=img_feat,
                                                  embedding_pts=embedding_pts,
@@ -486,8 +486,8 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
     # Points for the 'posterior' frame according to the estimated scene flow + time
     post_frame_idx = ref_frame_idx + 1./num_frames * 2.
     post_rays_ndc = rays_ndc + raw_sf_ref2post
-    raw_pts_post, pts_post = prepare_dynamic_pts(args, data_mvs, rays_pts, post_rays_ndc,
-                                                 rays_dir, cos_angle, post_frame_idx,
+    raw_pts_post, pts_post = prepare_dynamic_pts(args, rays_pts, post_rays_ndc, rays_dir,
+                                                 cos_angle, post_frame_idx, cam_mat=cam_mat,
                                                  volume_feature=volume_feature,
                                                  imgs=imgs, img_feat=img_feat,
                                                  embedding_pts=embedding_pts,
@@ -524,8 +524,9 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         # Points for prevprev frame according to the estimated scene flow t - 2
         prevprev_frame_idx = ref_frame_idx - 2./num_frames * 2.
         prevprev_rays_ndc = raw_pts_prev[..., :3] + raw_sf_prev2prevprev
-        raw_pts_prevprev, pts_prevprev = prepare_dynamic_pts(args, data_mvs, rays_pts, prevprev_rays_ndc,
+        raw_pts_prevprev, pts_prevprev = prepare_dynamic_pts(args, rays_pts, prevprev_rays_ndc,
                                                              rays_dir, cos_angle, prevprev_frame_idx,
+                                                             cam_mat=cam_mat,
                                                              volume_feature=volume_feature,
                                                              imgs=imgs, img_feat=img_feat,
                                                              embedding_pts=embedding_pts,
@@ -551,8 +552,9 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
         # Points for postpost frame according to the estimated scene flow t + 2
         postpost_frame_idx = ref_frame_idx + 2./num_frames * 2.
         postpost_rays_ndc = raw_pts_post[..., :3] + raw_sf_post2postpost
-        raw_pts_postpost, pts_postpost = prepare_dynamic_pts(args, data_mvs, rays_pts, postpost_rays_ndc,
+        raw_pts_postpost, pts_postpost = prepare_dynamic_pts(args, rays_pts, postpost_rays_ndc,
                                                              rays_dir, cos_angle, postpost_frame_idx,
+                                                             cam_mat=cam_mat,
                                                              volume_feature=volume_feature,
                                                              imgs=imgs, img_feat=img_feat,
                                                              embedding_pts=embedding_pts,
@@ -574,9 +576,11 @@ def render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_di
 
 
 
-def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
+def rendering(args, rays_pts, rays_ndc, depth_candidates, rays_dir,
               volume_feature_static=None, volume_feature_dynamic=None,
-              imgs=None, img_feat=None, neighbour_frames=None, network_fn=None, network_fn_dy=None,
+              imgs=None, img_feat=None, neighbour_frames=None,
+              im_cam_mat=None, nb_cam_mat=None,
+              network_fn=None, network_fn_dy=None,
               embedding_pts=None, embedding_xyzt=None, embedding_dir=None,
               chain_bwd=False, chain_5frames=False, ref_frame_idx=None, num_frames=None,
               time_codes=None, white_bkgd=False, scene_flow=False, val=False,
@@ -602,20 +606,19 @@ def rendering(args, data_mvs, rays_pts, rays_ndc, depth_candidates, rays_dir,
     # Distance between ray intervals
     dists = depth2dist(depth_candidates, cos_angle)
 
-    ret = render_static(args, data_mvs, rays_pts, rays_ndc,
-                        depth_candidates, rays_dir, dists,
+    ret = render_static(args, rays_pts, rays_ndc, depth_candidates, rays_dir, dists,
                         cos_angle, volume_feature=volume_feature_static,
-                        imgs=imgs, img_feat=img_feat, network_fn=network_fn,
+                        imgs=imgs, img_feat=img_feat, network_fn=network_fn, cam_mat=im_cam_mat,
                         embedding_pts=embedding_pts, embedding_dir=embedding_dir,
                         time_codes=time_codes, white_bkgd=white_bkgd,
                         scene_flow=scene_flow, raw_noise_std=raw_noise_std)
 
     if scene_flow:
-        ret_dy = render_dynamic(args, data_mvs, rays_pts, rays_ndc, depth_candidates,
+        ret_dy = render_dynamic(args, rays_pts, rays_ndc, depth_candidates,
                                 rays_dir, dists, cos_angle,  ret['raw_rgba'], ret['raw_blend_w'],
                                 ref_frame_idx, num_frames, chain_bwd, chain_5frames,
                                 volume_feature=volume_feature_dynamic, imgs=neighbour_frames,
-                                img_feat=img_feat, network_fn=network_fn_dy,
+                                cam_mat=nb_cam_mat, img_feat=img_feat, network_fn=network_fn_dy,
                                 embedding_pts=embedding_xyzt, embedding_dir=embedding_dir,
                                 val=val, raw_noise_std=raw_noise_std)
         ret.update(ret_dy)

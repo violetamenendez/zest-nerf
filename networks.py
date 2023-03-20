@@ -391,6 +391,8 @@ class MVSNeRF_G(nn.Module):
         c2ws = x['c2ws']
         intrinsics = x['intrinsics']
         depths = x['depths_h']
+        im_cam_mat ={'w2cs': x['w2cs'],
+                     'intrinsics': x['intrinsics']}
 
         # Neural Encoding Volume generation
         # imgs -> cost vol -> Enc vol (volume_feature)
@@ -414,13 +416,14 @@ class MVSNeRF_G(nn.Module):
                        step=step, variable_patches=(self.args.gan_type=='graf'))
 
         # Render colours along rays from volume feature and images
-        ret = rendering(self.args, x,
+        ret = rendering(self.args,
                         rays_pts, rays_NDC,
                         depth_candidates,
                         rays_dir,
-                        volume_feature,
-                        imgs[:, :-1],
+                        volume_feature_static=volume_feature,
+                        imgs=imgs[:, :-1],
                         img_feat=None,
+                        im_cam_mat=im_cam_mat,
                         network_fn=self.nerf,
                         embedding_pts=self.embedding_pts,
                         embedding_dir=self.embedding_dir,
@@ -481,6 +484,8 @@ class DyMVSNeRF_G(nn.Module):
         frame_t = x['time'].item()
         num_frames = x['total_frames'].item()
         ref_frame_idx = frame_t/num_frames * 2. - 1.0 # normalised frame index for reference image
+        im_cam_mat ={'w2cs': x['w2cs'],
+                     'intrinsics': x['intrinsics']}
 
         # Ground truth optical flow
         flow_fwds = x['flow_fwds']
@@ -520,10 +525,13 @@ class DyMVSNeRF_G(nn.Module):
         # Dynamic Neural Encoding Volume generation
         dy_env_vol = None
         nb_frames = None
+        nb_cam_mat = None
         if self.encoding_net_dy is not None:
             # Neighbouring frames
             nb_frames = x['nb_imgs']
             nb_proj_mats = x['nb_proj_mats']
+            nb_cam_mat ={'w2cs': x['nb_w2cs'],
+                         'intrinsics': x['nb_intr']}
 
             pad = self.args.pad
             dy_env_vol, img_feat, depth_values = self.encoding_net_dy(nb_frames,
@@ -548,7 +556,7 @@ class DyMVSNeRF_G(nn.Module):
         self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
 
         # Render colours along rays from volume feature and images
-        ret = rendering(self.args, x,
+        ret = rendering(self.args,
                         rays_pts, rays_NDC,
                         depth_candidates,
                         rays_dir,
@@ -556,6 +564,8 @@ class DyMVSNeRF_G(nn.Module):
                         volume_feature_dynamic=dy_env_vol,
                         imgs=imgs[:, :-1],
                         neighbour_frames=nb_frames,
+                        im_cam_mat=im_cam_mat,
+                        nb_cam_mat=nb_cam_mat,
                         network_fn=self.nerf_static,
                         network_fn_dy=self.nerf_dynamic,
                         embedding_pts=self.embedding_pts,
@@ -595,6 +605,8 @@ class DyMVSNeRF_G(nn.Module):
         frame_t = x['time'].item()
         num_frames = x['total_frames'].item()
         ref_frame_idx = frame_t/num_frames * 2. - 1.0 # normalised frame index for reference image
+        im_cam_mat ={'w2cs': x['w2cs'],
+                     'intrinsics': x['intrinsics']}
 
         # Ground truth optical flow
         flow_fwds = x['flow_fwds']
@@ -619,10 +631,13 @@ class DyMVSNeRF_G(nn.Module):
             # Dynamic Neural Encoding Volume generation
             dy_env_vol = None
             nb_frames = None
+            nb_cam_mat = None
             if self.encoding_net_dy is not None:
                 # Neighbouring frames
                 nb_frames = x['nb_imgs']
                 nb_proj_mats = x['nb_proj_mats']
+                nb_cam_mat ={'w2cs': x['nb_w2cs'],
+                             'intrinsics': x['nb_intr']}
 
                 pad = self.args.pad
                 self.encoding_net_dy.train()
@@ -655,7 +670,7 @@ class DyMVSNeRF_G(nn.Module):
                 self.chain_bwd = not self.chain_bwd # alternate chaining backwards and forwards scene flows
 
                 # Render colours along rays from volume feature and images
-                ret = rendering(self.args, x,
+                ret = rendering(self.args,
                                 rays_pts, rays_NDC,
                                 depth_candidates,
                                 rays_dir,
@@ -663,6 +678,8 @@ class DyMVSNeRF_G(nn.Module):
                                 volume_feature_dynamic=dy_env_vol,
                                 imgs=imgs[:, :-1],
                                 neighbour_frames=nb_frames,
+                                im_cam_mat=im_cam_mat,
+                                nb_cam_mat=nb_cam_mat,
                                 network_fn=self.nerf_static,
                                 network_fn_dy=self.nerf_dynamic,
                                 embedding_pts=self.embedding_pts,
