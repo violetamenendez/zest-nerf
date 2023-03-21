@@ -831,7 +831,7 @@ class MVSNeRFSystem(LightningModule):
 
         imgs, proj_mats = batch['images'], batch['proj_mats']
         near_fars = batch['near_fars']
-        depths = batch['depths_h']
+        depths = batch['depths_h'] if 'depths_h' in batch else batch['depths']
         time_code = self.time_codes[batch['keyframe_id']].to(self.device) if self.time_codes is not None else None
         im_cam_mat ={'w2cs': batch['w2cs'],
                      'intrinsics': batch['intrinsics']}
@@ -957,7 +957,7 @@ class MVSNeRFSystem(LightningModule):
             self.hparams.img_downscale = torch.rand((1,)) * 0.75 + 0.25
             w2cs = batch['w2cs']
             c2ws, intrinsics = batch['c2ws'], batch['intrinsics']
-            depths = batch['depths_h']
+            depths = batch['depths_h'] if 'depths_h' in batch else batch['depths']
 
             # Encoding volume
             volume_feature, img_feat, _ = self.encoding_net(imgs[:, :3],

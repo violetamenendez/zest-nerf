@@ -390,7 +390,7 @@ class MVSNeRF_G(nn.Module):
         w2cs = x['w2cs']
         c2ws = x['c2ws']
         intrinsics = x['intrinsics']
-        depths = x['depths_h']
+        depths = x['depths_h'] if 'depths_h' in x else x['depths']
         im_cam_mat ={'w2cs': x['w2cs'],
                      'intrinsics': x['intrinsics']}
 

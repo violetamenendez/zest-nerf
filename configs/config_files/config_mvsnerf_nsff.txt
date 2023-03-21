@@ -10,7 +10,10 @@ save_dir = /storage/projects/ganmvsnerf/runs
 
 # Training
 num_epochs = 6000
-batch_size = 1024
+batch_size = 4096
+num_input = 8
+num_keyframes = 8
+
 # Encoding volume
 use_mvs = True
 pad = 24 # For MVS with multiple cameras, to be able to warp the volume
