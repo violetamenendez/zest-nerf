@@ -210,6 +210,7 @@ class MVSNeRFSystem(LightningModule):
             kwargs['use_mvs_dy'] = self.hparams.use_mvs_dy
             kwargs['img_h'] = self.hparams.img_h
             kwargs['img_w'] = self.hparams.img_w
+            kwargs['crossval'] = self.hparams.crossval
         self.train_dataset = dataset(self.hparams.datadir,
                                      split='train',
                                      config_dir=self.hparams.configdir,
@@ -228,6 +229,7 @@ class MVSNeRFSystem(LightningModule):
             kwargs['use_mvs_dy'] = self.hparams.use_mvs_dy
             kwargs['img_h'] = self.hparams.img_h
             kwargs['img_w'] = self.hparams.img_w
+            kwargs['crossval'] = self.hparams.crossval
         self.val_dataset = dataset(self.hparams.datadir,
                                    split='val',
                                    config_dir=self.hparams.configdir,
@@ -247,6 +249,7 @@ class MVSNeRFSystem(LightningModule):
             kwargs['use_mvs_dy'] = self.hparams.use_mvs_dy
             kwargs['img_h'] = self.hparams.img_h
             kwargs['img_w'] = self.hparams.img_w
+            kwargs['crossval'] = self.hparams.crossval
         self.test_dataset = dataset(self.hparams.datadir,
                                     split='test',
                                     config_dir=self.hparams.configdir,

@@ -13,7 +13,7 @@ from .data_utils import center_poses
 
 
 class NSFFDataset(Dataset):
-    def __init__(self, root_dir, config_dir, split='train',
+    def __init__(self, root_dir, config_dir, split='train', crossval='NSFF',
                  downSample=1.0, max_len=-1,
                  scene=None, closest_views=False,
                  use_mvs=False, use_mvs_dy=False,
@@ -25,6 +25,7 @@ class NSFFDataset(Dataset):
         self.root_dir = Path(root_dir)
         self.config_dir = Path(config_dir)
         self.split = split
+        self.crossval = crossval
         self.use_mvs = use_mvs
         self.use_mvs_dy = use_mvs_dy
         self.num_keyframes = num_keyframes
@@ -50,7 +51,7 @@ class NSFFDataset(Dataset):
 
     def build_metas(self, scene):
         if scene == None:
-            scene_list = self.config_dir / f'lists/NSFF_{self.split}.txt'
+            scene_list = self.config_dir / f'lists/{self.crossval}_{self.split}.txt'
 
             with open(scene_list) as f:
                 self.scenes = [line.rstrip() for line in f.readlines()]
