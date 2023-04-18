@@ -80,6 +80,8 @@ def config_parser(cmd=None):
                         help='training over keyframes of a video')
     parser.add_argument('--num_keyframes', type=int, default=10,
                         help='how many keyframes to train on')
+    parser.add_argument('--frame_jump', type=int, default=1,
+                        help='how many frames to skip for temporal neighbours')
     parser.add_argument('--train_sceneflow', action='store_true',
                         help='training of a dynamic scene by predicting scene flow. See: https://www.cs.cornell.edu/~zl548/NSFF/')
     parser.add_argument("--finetune_scene", type=str, default=None,

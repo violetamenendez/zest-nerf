@@ -17,7 +17,7 @@ class NSFFDataset(Dataset):
                  downSample=1.0, max_len=-1,
                  scene=None, closest_views=False,
                  use_mvs=False, use_mvs_dy=False,
-                 num_keyframes=10,
+                 num_keyframes=10, frame_jump=1,
                  img_h=288, img_w=544):
         """
         Neural Scene Flow Fields dataset https://github.com/zhengqili/Neural-Scene-Flow-Fields
@@ -29,6 +29,7 @@ class NSFFDataset(Dataset):
         self.use_mvs = use_mvs
         self.use_mvs_dy = use_mvs_dy
         self.num_keyframes = num_keyframes
+        self.frame_jump = frame_jump # Number of frames to skip to get the temporal neighbours
         self.downSample = downSample
         self.img_wh = (int(img_w*downSample),int(img_h*downSample))
         assert self.img_wh[0] % 32 == 0 or self.img_wh[1] % 32 == 0, \
@@ -188,8 +189,8 @@ class NSFFDataset(Dataset):
             view_ids += self.key_frames[scene]
         view_ids += [target_frame]
         # First neighbours
-        first_nb_ids = [max(target_frame - 1, 0), # +-1 frames
-                        min(target_frame + 1, int(num_frames) - 1)]
+        first_nb_ids = [max(target_frame - (1 * self.frame_jump), 0), # +-1 frames
+                        min(target_frame + (1 * self.frame_jump), int(num_frames) - 1)]
 
 
         imgs, disps, proj_mats = [], [], []
@@ -206,10 +207,10 @@ class NSFFDataset(Dataset):
 
         if self.use_mvs_dy:
             # Second neighbours
-            neighbourgs = [max(target_frame - 2, 0),
-                           max(target_frame - 1, 0),
-                           min(target_frame + 1, int(num_frames) - 1),
-                           min(target_frame + 2, int(num_frames) - 1)]
+            neighbourgs = [max(target_frame - (2 * self.frame_jump), 0),
+                           max(target_frame - (1 * self.frame_jump), 0),
+                           min(target_frame + (1 * self.frame_jump), int(num_frames) - 1),
+                           min(target_frame + (2 * self.frame_jump), int(num_frames) - 1)]
 
             # Matrices for  neighbours +-2 frames
             nb_imgs, nb_proj_mats = [], []
