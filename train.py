@@ -16,6 +16,7 @@ import imageio
 import logging, coloredlogs
 from pathlib import Path
 import math, random
+import wandb
 
 # torch
 import torch
@@ -54,7 +55,7 @@ coloredlogs.install(
 )
 
 class MVSNeRFSystem(LightningModule):
-    def __init__(self, hparams, pts_embedder=True, use_mvs=True, dir_embedder=False):
+    def __init__(self, hparams, pts_embedder=True, use_mvs=True, dir_embedder=True):
         # For MVSSystem we need to call it with use_mvs=True, dir_embedder=False, pts_embedder=True
         super(MVSNeRFSystem, self).__init__()
         self.save_hyperparameters(hparams)
@@ -948,50 +949,146 @@ class MVSNeRFSystem(LightningModule):
         return
 
     def test_step(self, batch, batch_nb):
+        if self.hparams.train_sceneflow:
+            log = self.test_step_sceneflow(batch, batch_nb)
+        else:
+            log = self.test_step_svs(batch, batch_nb)
+        return log
+
+    def test_step_sceneflow(self, batch, batch_nb):
         logging.info("TEST STEP")
         # TODO - refactor
 
+        with torch.no_grad():
+            # Validation step
+            imgs, rgbs_blend, depths_blend, \
+                rgbs_rig, depths_rig, \
+                rgbs_dy, depths_dy, \
+                weights_dd = self.generator.forward_val(batch)
+
+            # Validation processes only one image at a time, so batch N==1
+            imgs = imgs[0] # [V,3,H,W]
+            tgt_img = imgs[-1].unsqueeze(0) # [1,3,H,W]
+            V, C, H, W = imgs.shape
+
+            rgb_blend = torch.clamp(torch.cat(rgbs_blend).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+            rgb_rig = torch.clamp(torch.cat(rgbs_rig).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+            rgb_dy = torch.clamp(torch.cat(rgbs_dy).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+            depth_blend = torch.cat(depths_blend).reshape(H, W)
+            depth_rig = torch.cat(depths_rig).reshape(H, W)
+            depth_dy = torch.cat(depths_dy).reshape(H, W)
+            weights_dd = torch.cat(weights_dd).reshape(H, W)
+
+            # loss
+            log = {}
+            # metrics
+            psnr_ = psnr(rgb_blend, tgt_img, 1)
+            ssim_ = ssim(rgb_blend, tgt_img, 5).mean()
+            lpips_ = self.lpips(rgb_blend, tgt_img)
+            log['test_psnr'] = psnr_
+            log['test_ssim'] = ssim_
+            log['test_lpips'] = lpips_
+            logging.info("Test metrics: PSNR "+str(psnr_)+", SSIM "+str(ssim_)+", LPIPS "+str(lpips_))
+
+            # Save test images locally
+            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'test_images'
+            save_dir_vis.mkdir(parents=True, exist_ok=True)
+
+            # Image logs
+            log_imgs = {}
+            # RGB visualisation
+            log_imgs['test/rgb_map_blend'] = [wandb.Image(rgb_blend)]
+            log_imgs['test/rgb_map_rigid'] = [wandb.Image(rgb_rig)]
+            log_imgs['test/rgb_map_dy'] = [wandb.Image(rgb_dy)]
+            torchvision.utils.save_image(rgb_blend, save_dir_vis / f'rgb_map_blend_{self.idx:02d}.png')
+
+            # Depth visualisation
+            minmax = [2.0, 6.0]
+            depth_vis_b, _ = visualize_depth(depth_blend, minmax)
+            depth_vis_r, _ = visualize_depth(depth_rig, minmax)
+            depth_vis_d, _ = visualize_depth(depth_dy, minmax)
+            log_imgs['test/depth_map_blend'] = [wandb.Image(depth_vis_b[None])]
+            log_imgs['test/depth_map_rigid'] = [wandb.Image(depth_vis_r[None])]
+            log_imgs['test/depth_map_dy'] = [wandb.Image(depth_vis_d[None])]
+            torchvision.utils.save_image(depth_vis_b[None], save_dir_vis / f'depth_map_blend_{self.idx:02d}.png')
+
+            # Visualise compositing weights for dynamic side of network
+            log_imgs['test/weights_map_dd'] = [wandb.Image(weights_dd[None])]
+
+            # Comparative RGB ground truth, estimated, absolute error
+            img_err_abs_b = (rgb_blend - tgt_img).abs()
+            img_vis = torch.cat((imgs.cpu(), rgb_blend.cpu(), img_err_abs_b.cpu()*5), dim=0) # [V 3 H W]
+            log_imgs['test/summary_img'] = [wandb.Image(img_vis)]
+
+            # Save summary visualisation locally
+            img_vis = torch.cat((img_vis, depth_vis_b[None]), dim=0)
+            img_vis = img_vis.permute(2,0,3,1).reshape(img_vis.shape[2],-1,3).numpy()
+            imageio.imwrite(save_dir_vis / f'summary_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
+            self.idx += 1
+
+            self.logger.experiment.log(log_imgs)
+
+        return log
+
+    def test_step_svs(self, batch, batch_nb):
+        logging.info("TEST STEP")
+
+                ### Forward
         imgs, proj_mats = batch['images'], batch['proj_mats']
         near_fars = batch['near_fars']
+        depths = batch['depths_h'] if 'depths_h' in batch else batch['depths']
+        time_code = self.time_codes[batch['keyframe_id']].to(self.device) if self.time_codes is not None else None
+        im_cam_mat ={'w2cs': batch['w2cs'],
+                     'intrinsics': batch['intrinsics']}
 
-        self.encoding_net.train()
         N, V, C, H, W = imgs.shape
         logging.info("image batch: imgs "+str(imgs.shape))
 
+
+        ##################  rendering #####################
         with torch.no_grad():
 
-            self.hparams.img_downscale = torch.rand((1,)) * 0.75 + 0.25
-            w2cs = batch['w2cs']
-            c2ws, intrinsics = batch['c2ws'], batch['intrinsics']
-            depths = batch['depths_h'] if 'depths_h' in batch else batch['depths']
-
-            # Encoding volume
-            volume_feature, img_feat, _ = self.encoding_net(imgs[:, :3],
-                                                            proj_mats[:, :3],
-                                                            near_fars[0,0],
-                                                            pad=self.hparams.pad)
-            logging.info("volume_feature "+str(volume_feature.shape))
+            self.hparams.img_downscale = torch.rand((1,)) * 0.75 + 0.25  # for super resolution ## what?? # DIFFERENT
+            w2cs = batch['w2cs'] # I think this is just using camera 0 as reference, which is already done inside of build_rays function!!!!!!!!1
+            c2ws, intrinsics = batch['c2ws'], batch['intrinsics'] # Target view is the last view
+            # TODO - debug volume_feature, has wrong values
+            volume_feature = None
+            pad = 0
+            if self.encoding_net is not None:
+                pad = self.hparams.pad
+                self.encoding_net.train()
+                volume_feature, img_feat, _ = self.encoding_net(imgs[:, :-1],
+                                                                proj_mats[:, :-1],
+                                                                near_fars[0,0],
+                                                                pad=pad)
+                logging.info("volume_feature "+str(volume_feature.shape))
 
             imgs = self.unpreprocess(imgs)
             rgbs, depth_preds = [],[]
+            # TODO - convert training to chunks? or forward
             for chunk_idx in range(H*W//self.hparams.chunk + int(H*W%self.hparams.chunk>0)):
 
                 rays_pts, rays_dir, _, rays_NDC, depth_candidates, depth, t_vals = \
-                    build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars, self.hparams.N_samples, stratified=False, pad=self.hparams.pad, chunk=self.hparams.chunk, idx=chunk_idx, val=True, isRandom=False)
+                    build_rays(imgs, depths, w2cs, c2ws, intrinsics, near_fars,
+                               self.hparams.N_samples, stratified=False, pad=pad,
+                               chunk=self.hparams.chunk, idx=chunk_idx, val=True,
+                               isRandom=False)
 
-                rgb, disp, acc, depth_pred, density_ray = rendering(self.hparams, batch,
-                                                                    rays_pts, rays_NDC,
-                                                                    depth_candidates,
-                                                                    rays_dir,
-                                                                    volume_feature,
-                                                                    imgs[:, :-1],
-                                                                    img_feat=None,
-                                                                    network_fn=self.nerf_coarse,
-                                                                    embedding_pts=self.embedding_xyz,
-                                                                    embedding_dir=self.embedding_dir,
-                                                                    white_bkgd=self.hparams.white_bkgd)
-                rgbs.append(rgb.squeeze(0));depth_preds.append(depth_pred.squeeze(0))
-                logging.info("render outs rgb depth "+str(rgb.shape)+", "+str(depth_pred.shape))
+                ret =  rendering(self.hparams,
+                                rays_pts, rays_NDC,
+                                depth_candidates,
+                                rays_dir,
+                                volume_feature_static=volume_feature,
+                                imgs=imgs[:, :-1],
+                                img_feat=None,
+                                im_cam_mat=im_cam_mat,
+                                network_fn=self.nerf_coarse,
+                                embedding_pts=self.embedding_xyz,
+                                embedding_dir=self.embedding_dir,
+                                time_codes=time_code,
+                                white_bkgd=self.hparams.white_bkgd)
+                rgbs.append(ret['rgb_map'].squeeze(0))
+                depth_preds.append(ret['depth_map'].squeeze(0))
 
             # batch N==1
             imgs = imgs[0] # [V,3,H,W]
@@ -1010,14 +1107,26 @@ class MVSNeRFSystem(LightningModule):
             log['test_lpips'] = lpips_
             logging.info("Test metrics: PSNR "+str(psnr_)+", SSIM "+str(ssim_)+", LPIPS "+str(lpips_))
 
+            # Save test images locally
+            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'test_images'
+            save_dir_vis.mkdir(parents=True, exist_ok=True)
 
+            ### Log images ###
+            log_imgs = {}
+            # Predicted RGB
+            log_imgs['test/rgb_map'] = [wandb.Image(rgb)]
+            torchvision.utils.save_image(rgb, save_dir_vis / f'rgb_map_{self.idx:02d}.png')
+
+            # Predicted depth
             minmax = [2.0, 6.0]
             depth_pred_r_, _ = visualize_depth(depth_r, minmax)
-            self.logger.experiment.add_images('val/depth_gt_pred_err', depth_pred_r_[None], self.global_step)
+            log_imgs['test/depth_gt_pred_err'] = [wandb.Image(depth_pred_r_[None])]
+            torchvision.utils.save_image(depth_pred_r_[None], save_dir_vis / f'depth_gt_pred_err_{self.idx:02d}.png')
             logging.info("Depth rays? "+str(depth_r.shape)+", "+str(depth_pred_r_.shape))
 
+            # Input images + predicted RGB + absolute error
             img_vis = torch.cat((imgs.cpu(), rgb.cpu(), img_err_abs.cpu()*5), dim=0) # [V 3 H W]
-            self.logger.experiment.add_images('val/rgb_pred_err', img_vis, self.global_step) # only show one sample from the batch
+            log_imgs['test/summary_img'] = [wandb.Image(img_vis)]
             logging.info("img_vis "+str(img_vis.shape))
 
             img_vis = torch.cat((img_vis,depth_pred_r_[None]),dim=0)
@@ -1026,25 +1135,28 @@ class MVSNeRFSystem(LightningModule):
             img_vis = img_vis.permute(2,0,3,1).reshape(img_vis.shape[2],-1,3).numpy()
             logging.info("img_vis "+str(img_vis.shape))
 
-            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'val_images'
+            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'test_images'
             save_dir_vis.mkdir(parents=True, exist_ok=True)
-            imageio.imwrite(save_dir_vis / f'{self.global_step:08d}_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
+            imageio.imwrite(save_dir_vis / f'summary_img_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
             self.idx += 1
+
+            self.logger.experiment.log(log_imgs)
 
         del rays_NDC, rays_dir, rays_pts, volume_feature
 
         return log
 
-    def test_epoch_end(self, outputs):
+    def test_epoch_end(self, metrics):
         logging.info("End of test epoch")
 
-        mean_psnr = torch.stack([x['test_psnr'] for x in outputs]).mean()
-        mean_ssim = torch.stack([x['test_ssim'] for x in outputs]).mean()
-        mean_lpips = torch.stack([x['test_lpips'] for x in outputs]).mean()
+        metrics_summary = {
+            'mean_psnr': torch.stack([x['test_psnr'] for x in metrics]).mean(),
+            'mean_ssim': torch.stack([x['test_ssim'] for x in metrics]).mean(),
+            'mean_lpips': torch.stack([x['test_lpips'] for x in metrics]).mean()
+        }
 
-        self.log('test_PSNR', mean_psnr, prog_bar=True)
-        self.log('test_SSIM', mean_ssim, prog_bar=False)
-        self.log('test_LPIPS', mean_lpips, prog_bar=False)
+
+        self.logger.experiment.log(metrics_summary)
 
         return
 
