@@ -800,35 +800,42 @@ class MVSNeRFSystem(LightningModule):
             log['val_lpips'] = lpips_
             logging.info("Validation metrics: PSNR "+str(psnr_)+", SSIM "+str(ssim_)+", LPIPS "+str(lpips_))
 
+            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'val_images'
+            save_dir_vis.mkdir(parents=True, exist_ok=True)
+
+            ### Log images ###
+            log_imgs = {}
             # RGB visualisation
-            self.logger.log_image('val/rgb_map_blend', images=[rgb_blend], step=self.global_step)
-            self.logger.log_image('val/rgb_map_rigid', images=[rgb_rig], step=self.global_step)
-            self.logger.log_image('val/rgb_map_dy', images=[rgb_dy], step=self.global_step)
+            log_imgs['val/rgb_map_blend'] = [wandb.Image(rgb_blend)]
+            log_imgs['val/rgb_map_rigid'] = [wandb.Image(rgb_rig)]
+            log_imgs['val/rgb_map_dy'] = [wandb.Image(rgb_dy)]
+            torchvision.utils.save_image(rgb_blend, save_dir_vis / f'rgb_map_blend_{self.idx:02d}.png')
 
             # Depth visualisation
             minmax = [2.0, 6.0]
             depth_vis_b, _ = visualize_depth(depth_blend, minmax)
             depth_vis_r, _ = visualize_depth(depth_rig, minmax)
             depth_vis_d, _ = visualize_depth(depth_dy, minmax)
-            self.logger.log_image('val/depth_map_blend', images=[depth_vis_b[None]], step=self.global_step)
-            self.logger.log_image('val/depth_map_rigid', images=[depth_vis_r[None]], step=self.global_step)
-            self.logger.log_image('val/depth_map_dy', images=[depth_vis_d[None]], step=self.global_step)
+            log_imgs['val/depth_map_blend'] = [wandb.Image(depth_vis_b[None])]
+            log_imgs['val/depth_map_rigid'] = [wandb.Image(depth_vis_r[None])]
+            log_imgs['val/depth_map_dy'] = [wandb.Image(depth_vis_d[None])]
+            torchvision.utils.save_image(depth_vis_b[None], save_dir_vis / f'depth_map_blend_{self.idx:02d}.png')
 
             # Visualise compositing weights for dynamic side of network
-            self.logger.log_image('val/weights_map_dd', images=[weights_dd[None]], step=self.global_step)
+            log_imgs['val/weights_map_dd'] = [wandb.Image(weights_dd[None])]
 
             # Comparative RGB ground truth, estimated, absolute error
             img_err_abs_b = (rgb_blend - tgt_img).abs()
             img_vis = torch.cat((imgs.cpu(), rgb_blend.cpu(), img_err_abs_b.cpu()*5), dim=0) # [V 3 H W]
-            self.logger.log_image('val/rgb_pred_err', images=[img_vis], step=self.global_step) # only show one sample from the batch
+            log_imgs['val/summary_img'] = [wandb.Image(img_vis)]
 
             # Save summary visualisation locally
             img_vis = torch.cat((img_vis, depth_vis_b[None]), dim=0)
             img_vis = img_vis.permute(2,0,3,1).reshape(img_vis.shape[2],-1,3).numpy()
-            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'val_images'
-            save_dir_vis.mkdir(parents=True, exist_ok=True)
             imageio.imwrite(save_dir_vis / f'{self.global_step:08d}_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
             self.idx += 1
+
+            self.logger.experiment.log(log_imgs)
 
         return log
 
@@ -908,14 +915,23 @@ class MVSNeRFSystem(LightningModule):
             log['val_lpips'] = lpips_
             logging.info("Validation metrics: PSNR "+str(psnr_)+", SSIM "+str(ssim_)+", LPIPS "+str(lpips_))
 
+            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'val_images'
+            save_dir_vis.mkdir(parents=True, exist_ok=True)
+
+            ### Log images ###
+            log_imgs = {}
+            # Predicted RGB
+            log_imgs['val/rgb_map'] = [wandb.Image(rgb)]
+            torchvision.utils.save_image(rgb, save_dir_vis / f'rgb_map_{self.idx:02d}.png')
 
             minmax = [2.0, 6.0]
             depth_pred_r_, _ = visualize_depth(depth_r, minmax)
-            self.logger.log_image('val/depth_gt_pred_err', images=[depth_pred_r_[None]], step=self.global_step)
+            log_imgs['val/depth_gt_pred_err'] = [wandb.Image(depth_pred_r_[None])]
+            torchvision.utils.save_image(depth_pred_r_[None], save_dir_vis / f'depth_gt_pred_err_{self.idx:02d}.png')
             logging.info("Depth rays? "+str(depth_r.shape)+", "+str(depth_pred_r_.shape))
 
             img_vis = torch.cat((imgs.cpu(), rgb.cpu(), img_err_abs.cpu()*5), dim=0) # [V 3 H W]
-            self.logger.log_image('val/rgb_pred_err', images=[img_vis], step=self.global_step) # only show one sample from the batch
+            log_imgs['test/summary_img'] = [wandb.Image(img_vis)]
             logging.info("img_vis "+str(img_vis.shape))
 
             img_vis = torch.cat((img_vis,depth_pred_r_[None]),dim=0)
@@ -924,27 +940,26 @@ class MVSNeRFSystem(LightningModule):
             img_vis = img_vis.permute(2,0,3,1).reshape(img_vis.shape[2],-1,3).numpy()
             logging.info("img_vis "+str(img_vis.shape))
 
-            save_dir_vis = self.hparams.save_dir / self.hparams.expname / 'val_images'
-            save_dir_vis.mkdir(parents=True, exist_ok=True)
             imageio.imwrite(save_dir_vis / f'{self.global_step:08d}_{self.idx:02d}.png', (img_vis*255).astype('uint8'))
             self.idx += 1
+
+            self.logger.experiment.log(log_imgs)
 
         del rays_NDC, rays_dir, rays_pts, volume_feature
 
         return log
 
-    def validation_epoch_end(self, outputs):
+    def validation_epoch_end(self, metrics):
         logging.info("End of validation epoch")
 
-        mean_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
-        mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
-        mean_lpips = torch.stack([x['val_lpips'] for x in outputs]).mean()
+        metrics_summary = {
+            'mean_loss': torch.stack([x['val_loss'] for x in metrics]).mean(),
+            'mean_psnr': torch.stack([x['val_psnr'] for x in metrics]).mean(),
+            'mean_ssim': torch.stack([x['val_ssim'] for x in metrics]).mean(),
+            'mean_lpips': torch.stack([x['val_lpips'] for x in metrics]).mean()
+        }
 
-        self.log('val_loss', mean_loss, prog_bar=True)
-        self.log('val_PSNR', mean_psnr, prog_bar=True)
-        self.log('val_SSIM', mean_ssim, prog_bar=False)
-        self.log('val_LPIPS', mean_lpips, prog_bar=False)
+        self.logger.experiment.log(metrics_summary)
 
         return
 
