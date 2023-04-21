@@ -953,10 +953,10 @@ class MVSNeRFSystem(LightningModule):
         logging.info("End of validation epoch")
 
         metrics_summary = {
-            'mean_loss': torch.stack([x['val_loss'] for x in metrics]).mean(),
-            'mean_psnr': torch.stack([x['val_psnr'] for x in metrics]).mean(),
-            'mean_ssim': torch.stack([x['val_ssim'] for x in metrics]).mean(),
-            'mean_lpips': torch.stack([x['val_lpips'] for x in metrics]).mean()
+            'val_loss': torch.stack([x['val_loss'] for x in metrics]).mean(),
+            'val_PSNR': torch.stack([x['val_psnr'] for x in metrics]).mean(),
+            'val_SSIM': torch.stack([x['val_ssim'] for x in metrics]).mean(),
+            'val_LPIPS': torch.stack([x['val_lpips'] for x in metrics]).mean()
         }
 
         self.logger.experiment.log(metrics_summary)
@@ -1165,9 +1165,9 @@ class MVSNeRFSystem(LightningModule):
         logging.info("End of test epoch")
 
         metrics_summary = {
-            'mean_psnr': torch.stack([x['test_psnr'] for x in metrics]).mean(),
-            'mean_ssim': torch.stack([x['test_ssim'] for x in metrics]).mean(),
-            'mean_lpips': torch.stack([x['test_lpips'] for x in metrics]).mean()
+            'test_psnr': torch.stack([x['test_psnr'] for x in metrics]).mean(),
+            'test_ssim': torch.stack([x['test_ssim'] for x in metrics]).mean(),
+            'test_lpips': torch.stack([x['test_lpips'] for x in metrics]).mean()
         }
 
 
