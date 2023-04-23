@@ -949,17 +949,18 @@ class MVSNeRFSystem(LightningModule):
 
         return log
 
-    def validation_epoch_end(self, metrics):
+    def validation_epoch_end(self, outputs):
         logging.info("End of validation epoch")
 
-        metrics_summary = {
-            'val_loss': torch.stack([x['val_loss'] for x in metrics]).mean(),
-            'val_PSNR': torch.stack([x['val_psnr'] for x in metrics]).mean(),
-            'val_SSIM': torch.stack([x['val_ssim'] for x in metrics]).mean(),
-            'val_LPIPS': torch.stack([x['val_lpips'] for x in metrics]).mean()
-        }
+        mean_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
+        mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
+        mean_lpips = torch.stack([x['val_lpips'] for x in outputs]).mean()
 
-        self.log(metrics_summary)
+        self.log('val_loss', mean_loss, prog_bar=True)
+        self.log('val_PSNR', mean_psnr, prog_bar=True)
+        self.log('val_SSIM', mean_ssim, prog_bar=False)
+        self.log('val_LPIPS', mean_lpips, prog_bar=False)
 
         return
 
@@ -1161,17 +1162,17 @@ class MVSNeRFSystem(LightningModule):
 
         return log
 
-    def test_epoch_end(self, metrics):
+    def test_epoch_end(self, outputs):
         logging.info("End of test epoch")
 
-        metrics_summary = {
-            'test_psnr': torch.stack([x['test_psnr'] for x in metrics]).mean(),
-            'test_ssim': torch.stack([x['test_ssim'] for x in metrics]).mean(),
-            'test_lpips': torch.stack([x['test_lpips'] for x in metrics]).mean()
-        }
+        mean_psnr = torch.stack([x['test_psnr'] for x in outputs]).mean()
+        mean_ssim = torch.stack([x['test_ssim'] for x in outputs]).mean()
+        mean_lpips = torch.stack([x['test_lpips'] for x in outputs]).mean()
 
 
-        self.log(metrics_summary)
+        self.log('test_PSNR', mean_psnr, prog_bar=True)
+        self.log('test_SSIM', mean_ssim, prog_bar=False)
+        self.log('test_LPIPS', mean_lpips, prog_bar=False)
 
         return
 
