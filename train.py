@@ -959,7 +959,7 @@ class MVSNeRFSystem(LightningModule):
             'val_LPIPS': torch.stack([x['val_lpips'] for x in metrics]).mean()
         }
 
-        self.logger.experiment.log(metrics_summary)
+        self.log(metrics_summary)
 
         return
 
@@ -1171,7 +1171,7 @@ class MVSNeRFSystem(LightningModule):
         }
 
 
-        self.logger.experiment.log(metrics_summary)
+        self.log(metrics_summary)
 
         return
 
