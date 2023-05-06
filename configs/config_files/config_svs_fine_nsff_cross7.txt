@@ -1,0 +1,46 @@
+### Config for NSFF curl scene
+
+expname = svs_nsff_cross7
+
+# Data
+dataset_name = nsff
+datadir = /storage/datasets/NSFF/nvidia_data_full/
+configdir = configs/ # Directory containing dataset splits
+crossval = NSFF_cross7 # This should match the first part of the dataset splits name i.e. NSFF_cross7 for  NSFF_cross7_train.txt
+save_dir = /storage/projects/ganmvsnerf/runs
+finetune_scene = Skating-2
+
+# Training
+num_epochs = 6000
+batch_size = 4096
+lrate = 5e-4
+lrate_disc = 1e-4
+acc_grad = 32
+patch_size = 64
+num_input = 8
+num_keyframes = 8
+
+# Encoding volume
+use_mvs = True
+pad = 24 # For MVS with multiple cameras, to be able to warp the volume
+raw_noise_std = 1e0
+
+
+# Network
+use_viewdirs = True
+pts_embedder = True
+dir_embedder = True
+netdepth = 8
+netwidth = 256
+
+# Losses
+gan_type = graf
+gan_loss = lsgan
+with_depth_smoothness = True
+with_distortion_loss = True
+with_perceptual_loss = True
+lambda_rec = 20
+lambda_distortion = 0.001
+lambda_depth_smooth = 0.4
+lambda_adv = 1
+lambda_perc = 1
