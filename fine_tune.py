@@ -31,7 +31,7 @@ def finetune():
     kwargs['save_dir'] = hparams.save_dir
     kwargs['finetune_scene'] = hparams.finetune_scene
     kwargs['batch_size'] = hparams.batch_size
-    kwargs['num_extra_samples'] = hparams.num_extra_samples
+    kwargs['num_extra_samples'] = 0
     # kwargs['dataset_name'] = hparams.dataset_name
     # kwargs['finetune_scene'] = hparams.finetune_scene
     # kwargs['batch_size'] = hparams.batch_size
