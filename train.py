@@ -1169,6 +1169,11 @@ class MVSNeRFSystem(LightningModule):
         mean_ssim = torch.stack([x['test_ssim'] for x in outputs]).mean()
         mean_lpips = torch.stack([x['test_lpips'] for x in outputs]).mean()
 
+        log_file = self.hparams.save_dir / self.hparams.expname / "test_metrics.txt"
+        with open(log_file, 'w') as f:
+            f.write(f"PSNR: {mean_psnr}\n")
+            f.write(f"SSIM: {mean_ssim}\n")
+            f.write(f"LPIPS: {mean_lpips}\n")
 
         self.log('test_PSNR', mean_psnr, prog_bar=True)
         self.log('test_SSIM', mean_ssim, prog_bar=False)
