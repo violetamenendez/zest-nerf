@@ -1,6 +1,6 @@
 ### Config for NSFF curl scene
 
-expname = svs_nsff_cross9
+expname = svs_fine_nsff_cross9
 
 # Data
 dataset_name = nsff

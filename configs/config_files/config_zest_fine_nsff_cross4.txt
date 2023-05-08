@@ -1,6 +1,6 @@
 ### Config for NSFF curl scene
 
-expname = nsff_cross4_mvs
+expname = zest_fine_nsff_cross4
 
 # Data
 dataset_name = nsff
