@@ -11,7 +11,7 @@ save_dir = /storage/projects/ganmvsnerf/runs
 finetune_scene = Balloon1-2
 
 # Training
-num_epochs = 6000
+num_epochs = 400
 batch_size = 4096
 lrate = 5e-4
 lrate_disc = 1e-4

@@ -11,7 +11,7 @@ save_dir = /storage/projects/ganmvsnerf/runs
 finetune_scene = Jumping
 
 # Training
-num_epochs = 6000
+num_epochs = 400
 batch_size = 4096
 num_input = 8
 num_keyframes = 8

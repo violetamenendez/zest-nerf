@@ -52,11 +52,11 @@ def finetune():
     )
 
     hparams.num_gpus = 1
-    trainer = Trainer(max_epochs=400,
+    trainer = Trainer(max_epochs=hparams.num_epochs,
                       logger=logger,
                       gpus=hparams.num_gpus,
                       num_sanity_val_steps=0,
-                      check_val_every_n_epoch = max(system.hparams.num_epochs//system.hparams.N_vis,1),
+                      check_val_every_n_epoch = max(hparams.num_epochs//system.hparams.N_vis,1),
                       benchmark=True,
                       precision=system.hparams.precision)
 
