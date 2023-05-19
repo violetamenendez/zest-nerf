@@ -195,6 +195,8 @@ def config_parser(cmd=None):
                         help='activate CNN visualisation tests')
     parser.add_argument("--save_test", type=str, default="test_suite",
                         help='path to directory to save test results')
+    parser.add_argument("--render_wanderpath", action='store_true',
+                        help="Render novel views in space")
 
     if cmd is not None:
         return parser.parse_args(cmd)

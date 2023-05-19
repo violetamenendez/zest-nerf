@@ -254,7 +254,6 @@ class MVSNeRFSystem(LightningModule):
             kwargs['img_w'] = self.hparams.img_w
             kwargs['crossval'] = self.hparams.crossval
             kwargs['frame_jump'] = self.hparams.frame_jump
-            kwargs['target_idx'] = self.hparams.target_idx
         self.test_dataset = dataset(self.hparams.datadir,
                                     split='test',
                                     config_dir=self.hparams.configdir,
@@ -966,7 +965,9 @@ class MVSNeRFSystem(LightningModule):
         return
 
     def test_step(self, batch, batch_nb):
-        if self.hparams.train_sceneflow:
+        if self.hparams.render_wanderpath:
+            log = self.test_step_wanderpath(batch, batch_nb)
+        elif self.hparams.train_sceneflow:
             log = self.test_step_sceneflow(batch, batch_nb)
         else:
             log = self.test_step_svs(batch, batch_nb)
@@ -1163,6 +1164,78 @@ class MVSNeRFSystem(LightningModule):
 
         return log
 
+    def test_step_wanderpath(self, batch, batch_nb):
+        logging.info("WANDER PATH RENDERING")
+
+        # wander_path_c2w = batch['wander_path_c2w']
+        # wander_path_w2c = batch['wander_path_w2c']
+
+        # batch['c2ws']
+        if batch_nb < 20 or batch_nb > 51:
+            return {}
+
+        # Save test images locally
+        frame_t = batch['time'].item()
+        save_dir_vis = self.hparams.save_dir / self.hparams.expname / f'render_wanderpath_frame{frame_t}'
+        save_dir_vis.mkdir(parents=True, exist_ok=True)
+
+        # print(batch['wander_path_c2w'].shape, batch['c2ws'].shape)
+        # print(batch['c2ws'][0,-1,:,:])
+        # print(batch['wander_path_c2w'].shape[1])
+        for i in range(batch['wander_path_c2w'].shape[1]):
+            batch['c2ws'][:,-1,:,:] = batch['wander_path_c2w'][:,i,:,:]
+            batch['w2cs'][:,-1,:,:] = batch['wander_path_w2c'][:,i,:,:]
+
+            with torch.no_grad():
+                # Validation step
+                imgs, rgbs_blend, depths_blend, \
+                    rgbs_rig, depths_rig, \
+                    rgbs_dy, depths_dy, \
+                    weights_dd = self.generator.forward_val(batch)
+
+                # Validation processes only one image at a time, so batch N==1
+                imgs = imgs[0] # [V,3,H,W]
+                tgt_img = imgs[-1].unsqueeze(0) # [1,3,H,W]
+                V, C, H, W = imgs.shape
+
+                rgb_blend = torch.clamp(torch.cat(rgbs_blend).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+                rgb_rig = torch.clamp(torch.cat(rgbs_rig).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+                rgb_dy = torch.clamp(torch.cat(rgbs_dy).reshape(1, H, W, 3).permute(0,3,1,2),0,1)
+                depth_blend = torch.cat(depths_blend).reshape(H, W)
+                depth_rig = torch.cat(depths_rig).reshape(H, W)
+                depth_dy = torch.cat(depths_dy).reshape(H, W)
+                weights_dd = torch.cat(weights_dd).reshape(H, W)
+
+                # loss
+                log = {}
+
+                # Image logs
+                log_imgs = {}
+                # RGB visualisation
+                # log_imgs['test/rgb_map_blend'] = [wandb.Image(rgb_blend)]
+                # log_imgs['test/rgb_map_rigid'] = [wandb.Image(rgb_rig)]
+                # log_imgs['test/rgb_map_dy'] = [wandb.Image(rgb_dy)]
+                torchvision.utils.save_image(rgb_blend, save_dir_vis / f'rgb_map_blend_{self.idx:02d}.png')
+
+                # Depth visualisation
+                minmax = [2.0, 6.0]
+                depth_vis_b, _ = visualize_depth(depth_blend, minmax)
+                depth_vis_r, _ = visualize_depth(depth_rig, minmax)
+                depth_vis_d, _ = visualize_depth(depth_dy, minmax)
+                # log_imgs['test/depth_map_blend'] = [wandb.Image(depth_vis_b[None])]
+                # log_imgs['test/depth_map_rigid'] = [wandb.Image(depth_vis_r[None])]
+                # log_imgs['test/depth_map_dy'] = [wandb.Image(depth_vis_d[None])]
+                torchvision.utils.save_image(depth_vis_b[None], save_dir_vis / f'depth_map_blend_{self.idx:02d}.png')
+
+                # Visualise compositing weights for dynamic side of network
+                # log_imgs['test/weights_map_dd'] = [wandb.Image(weights_dd[None])]
+
+                self.idx += 1
+
+                self.logger.experiment.log(log_imgs)
+
+        return log
+
     def test_epoch_end(self, outputs):
         logging.info("End of test epoch")
 
@@ -1182,21 +1255,18 @@ class MVSNeRFSystem(LightningModule):
 
         return
 
-    # def render_spiral(self, target_idx):
+    # def render_path(self, target_idx, render_poses, num_frames):
     #     print('RENDER VIEW INTERPOLATION')
-
-    #     render_poses = torch.Tensor(render_poses).to(self.device)
     #     print('target_idx ', target_idx)
 
-    #     num_img = float(poses.shape[0])
-    #     img_idx_embed = target_idx/float(num_img) * 2. - 1.0
+    #     img_idx_embed = target_idx/float(num_frames) * 2. - 1.0
 
     #     testsavedir = os.path.join(basedir, expname,
     #                             'render-spiral-frame-%03d'%\
     #                             target_idx + '_{}_{:06d}'.format('test' if args.render_test else 'path', start))
     #     os.makedirs(testsavedir, exist_ok=True)
     #     with torch.no_grad():
-    #         render_bullet_time(render_poses, img_idx_embed, num_img, hwf,
+    #         render_bullet_time(render_poses, img_idx_embed, num_frames, hwf,
     #                            args.chunk, render_kwargs_test,
     #                            gt_imgs=images, savedir=testsavedir,
     #                            render_factor=args.render_factor)

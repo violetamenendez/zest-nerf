@@ -43,6 +43,7 @@ def test():
     kwargs['datadir'] = hparams.datadir
     kwargs['expname'] = hparams.expname
     kwargs['save_dir'] = hparams.save_dir
+    kwargs['render_wanderpath'] = hparams.render_wanderpath
     # kwargs['dataset_name'] = hparams.dataset_name
     # kwargs['finetune_scene'] = hparams.finetune_scene
     # kwargs['batch_size'] = hparams.batch_size

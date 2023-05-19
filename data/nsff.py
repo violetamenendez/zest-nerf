@@ -18,7 +18,6 @@ class NSFFDataset(Dataset):
                  scene=None, closest_views=False,
                  use_mvs=False, use_mvs_dy=False,
                  num_keyframes=10, frame_jump=1,
-                 render_spiral=False, target_idx=10,
                  img_h=288, img_w=544):
         """
         Neural Scene Flow Fields dataset https://github.com/zhengqili/Neural-Scene-Flow-Fields
@@ -93,7 +92,7 @@ class NSFFDataset(Dataset):
         total number of valid video streams.
         """
         self.proj_mats, self.intrinsics, self.world2cams, self.cam2worlds = {}, {}, {}, {}
-        self.wander_path = {} # Rendering
+        self.wander_path_c2w, self.wander_path_w2c = {}, {} # Rendering
         self.poses, self.bounds = {}, {}
         self.N_images = 0
         for scene in self.scenes:
@@ -111,8 +110,10 @@ class NSFFDataset(Dataset):
 
             # Step 1: rescale focal length according to training resolution
             H, W, focal = poses[0, :, -1]  # original intrinsics, same for all images
+            # print(H,W, focal)
 
             focal = [focal* self.img_wh[0] / W, focal* self.img_wh[1] / H]
+            # print(H,W, focal)
 
             # Step 2: correct poses
             poses = np.concatenate([poses[..., 1:2], -poses[..., :1], poses[..., 2:4]], -1)
@@ -129,7 +130,8 @@ class NSFFDataset(Dataset):
             intrinsics_scene = []
             world2cams_scene = []
             cam2worlds_scene = []
-            wanderpath_scene = []
+            wanderpath_c2w_scene = []
+            wanderpath_w2c_scene = []
 
             w, h = self.img_wh
             num_frames = len(poses)
@@ -152,16 +154,19 @@ class NSFFDataset(Dataset):
                 proj_mats_scene.append(proj_mat_l)
 
                 # Novel view - wander path
-                target_c2w = self.wanderpath_poses(c2w, H, W, focal)
-                wanderpath_scene.append(target_c2w)
+                target_c2w = torch.from_numpy(np.stack(self.wanderpath_poses(c2w, H, W, focal)))
+                target_w2c = torch.inverse(target_c2w)
+                wanderpath_c2w_scene.append(target_c2w)
+                wanderpath_w2c_scene.append(target_w2c)
 
             self.proj_mats[scene] = torch.stack(proj_mats_scene).float()
             self.intrinsics[scene] = torch.stack(intrinsics_scene).float()
             self.world2cams[scene] = torch.stack(world2cams_scene).float()
             self.cam2worlds[scene] = torch.stack(cam2worlds_scene).float()
-            self.wander_path[scene] = torch.stack(wanderpath_scene).float()
+            self.wander_path_c2w[scene] = torch.stack(wanderpath_c2w_scene).float()
+            self.wander_path_w2c[scene] = torch.stack(wanderpath_w2c_scene).float()
 
-    def wanderpath_poses(c2w,  H, W, focal):
+    def wanderpath_poses(self, c2w,  H, W, focal):
         """
         Camera poses to render around a target view
 
@@ -172,9 +177,12 @@ class NSFFDataset(Dataset):
         num_frames = 60 # generate 60 frames around one original camera
         max_disp = 48.0 # 64 , 48
 
-        max_trans = max_disp / focal # TODO double check this, it was hwf[2][0] # Maximum camera translation to satisfy max_disp parameter
-        output_poses = []
+        max_trans = max_disp / focal[1] # TODO double check this, it was hwf[2][0] # Maximum camera translation to satisfy max_disp parameter
+        # print("max trans", max_trans)
+        # print("c2w")
+        # print(c2w)
 
+        output_poses = []
         for i in range(num_frames):
             x_trans = max_trans * np.sin(2.0 * np.pi * float(i) / float(num_frames))
             y_trans = max_trans * np.cos(2.0 * np.pi * float(i) / float(num_frames)) / 3.0 #* 3.0 / 4.0
@@ -191,9 +199,9 @@ class NSFFDataset(Dataset):
             ref_pose = np.concatenate([c2w[:3, :4], np.array([0.0, 0.0, 0.0, 1.0])[np.newaxis, :]], axis=0)
 
             render_pose = np.dot(ref_pose, i_pose)
-            print('render_pose ', render_pose.shape)
-            print(render_pose)
-            exit()
+            # print('render_pose ', render_pose.shape)
+            # print(render_pose)
+            # exit()
             output_poses.append(render_pose)
 
         return output_poses
@@ -354,6 +362,10 @@ class NSFFDataset(Dataset):
         coords = torch.where(mask > 0.1)
         motion_coords = torch.stack(coords, -1).float()
 
+        # Wander path for target idx
+        wander_path_c2w = self.wander_path_c2w[scene][target_frame]
+        wander_path_w2c = self.wander_path_c2w[scene][target_frame]
+
         sample = {}
         sample['images'] = torch.stack(imgs).float()  # (V, 3, H, W)
         sample['depths'] = torch.from_numpy(np.stack(disps)).float() # (1, H, W)
@@ -361,6 +373,8 @@ class NSFFDataset(Dataset):
         sample['flow_bwds'] = torch.from_numpy(np.stack(flow_bwds)).float().permute(0, 3, 1, 2) # (1, 2, H, W)
         sample['mask_fwds'] = torch.from_numpy(np.stack(mask_fwds)).float() # (1, H, W)
         sample['mask_bwds'] = torch.from_numpy(np.stack(mask_bwds)).float() # (1, H, W)
+        sample['wander_path_c2w'] = wander_path_c2w # (60, 4, 4)
+        sample['wander_path_w2c'] = wander_path_w2c # (60, 4, 4)
         sample['motion_coords'] = motion_coords # (M, 2) e.g., torch.Size([132079, 2])
         sample['w2cs'] = torch.stack(w2cs).float()  # (V, 4, 4)
         sample['c2ws'] = torch.stack(c2ws).float()  # (V, 4, 4)
