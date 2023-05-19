@@ -18,6 +18,7 @@ class NSFFDataset(Dataset):
                  scene=None, closest_views=False,
                  use_mvs=False, use_mvs_dy=False,
                  num_keyframes=10, frame_jump=1,
+                 render_spiral=False, target_idx=10,
                  img_h=288, img_w=544):
         """
         Neural Scene Flow Fields dataset https://github.com/zhengqili/Neural-Scene-Flow-Fields
@@ -92,6 +93,7 @@ class NSFFDataset(Dataset):
         total number of valid video streams.
         """
         self.proj_mats, self.intrinsics, self.world2cams, self.cam2worlds = {}, {}, {}, {}
+        self.wander_path = {} # Rendering
         self.poses, self.bounds = {}, {}
         self.N_images = 0
         for scene in self.scenes:
@@ -127,9 +129,11 @@ class NSFFDataset(Dataset):
             intrinsics_scene = []
             world2cams_scene = []
             cam2worlds_scene = []
+            wanderpath_scene = []
 
             w, h = self.img_wh
-            for idx in range(len(poses)):
+            num_frames = len(poses)
+            for idx in range(num_frames):
                 # camera-to-world, world-to-camera
                 c2w = torch.eye(4).float()
                 c2w[:3] = torch.FloatTensor(poses[idx])
@@ -146,10 +150,69 @@ class NSFFDataset(Dataset):
                 proj_mat_l = torch.eye(4)
                 proj_mat_l[:3, :4] = intrinsic @ w2c[:3, :4]
                 proj_mats_scene.append(proj_mat_l)
+
+                # Novel view - wander path
+                target_c2w = self.wanderpath_poses(c2w, H, W, focal)
+                wanderpath_scene.append(target_c2w)
+
             self.proj_mats[scene] = torch.stack(proj_mats_scene).float()
             self.intrinsics[scene] = torch.stack(intrinsics_scene).float()
             self.world2cams[scene] = torch.stack(world2cams_scene).float()
             self.cam2worlds[scene] = torch.stack(cam2worlds_scene).float()
+            self.wander_path[scene] = torch.stack(wanderpath_scene).float()
+
+    def wanderpath_poses(c2w,  H, W, focal):
+        """
+        Camera poses to render around a target view
+
+        Inputs:
+        - c2w: camera-to-world matrix for the target view
+        """
+        # TODO - transform this to torch tensors instead of np
+        num_frames = 60 # generate 60 frames around one original camera
+        max_disp = 48.0 # 64 , 48
+
+        max_trans = max_disp / focal # TODO double check this, it was hwf[2][0] # Maximum camera translation to satisfy max_disp parameter
+        output_poses = []
+
+        for i in range(num_frames):
+            x_trans = max_trans * np.sin(2.0 * np.pi * float(i) / float(num_frames))
+            y_trans = max_trans * np.cos(2.0 * np.pi * float(i) / float(num_frames)) / 3.0 #* 3.0 / 4.0
+            z_trans = max_trans * np.cos(2.0 * np.pi * float(i) / float(num_frames)) / 3.0
+
+            i_pose = np.concatenate([
+                np.concatenate(
+                    [np.eye(3), np.array([x_trans, y_trans, z_trans])[:, np.newaxis]], axis=1),
+                np.array([0.0, 0.0, 0.0, 1.0])[np.newaxis, :]
+            ],axis=0)#[np.newaxis, :, :]
+
+            i_pose = np.linalg.inv(i_pose) #torch.tensor(np.linalg.inv(i_pose)).float()
+
+            ref_pose = np.concatenate([c2w[:3, :4], np.array([0.0, 0.0, 0.0, 1.0])[np.newaxis, :]], axis=0)
+
+            render_pose = np.dot(ref_pose, i_pose)
+            print('render_pose ', render_pose.shape)
+            print(render_pose)
+            exit()
+            output_poses.append(render_pose)
+
+        return output_poses
+
+    # def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
+    #     render_poses = []
+    #     rads = np.array(list(rads) + [1.])
+    #     hwf = c2w[:,4:5]
+
+    #     for theta in np.linspace(0., 2. * np.pi * rots, N+1)[:-1]:
+    #         c = np.dot(c2w[:3,:4],
+    #                     np.array([np.cos(theta),
+    #                              -np.sin(theta),
+    #                              -np.sin(theta*zrate),
+    #                               1.]) * rads)
+
+    #         z = normalize(c - np.dot(c2w[:3,:4], np.array([0,0,-focal, 1.])))
+    #         render_poses.append(np.concatenate([viewmatrix(z, up, c), hwf], 1))
+    #     return render_poses
 
     def define_transforms(self):
         self.transform = T.ToTensor()

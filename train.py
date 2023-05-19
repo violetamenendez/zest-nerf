@@ -254,6 +254,7 @@ class MVSNeRFSystem(LightningModule):
             kwargs['img_w'] = self.hparams.img_w
             kwargs['crossval'] = self.hparams.crossval
             kwargs['frame_jump'] = self.hparams.frame_jump
+            kwargs['target_idx'] = self.hparams.target_idx
         self.test_dataset = dataset(self.hparams.datadir,
                                     split='test',
                                     config_dir=self.hparams.configdir,
@@ -1180,6 +1181,27 @@ class MVSNeRFSystem(LightningModule):
         self.log('test_LPIPS', mean_lpips, prog_bar=False)
 
         return
+
+    # def render_spiral(self, target_idx):
+    #     print('RENDER VIEW INTERPOLATION')
+
+    #     render_poses = torch.Tensor(render_poses).to(self.device)
+    #     print('target_idx ', target_idx)
+
+    #     num_img = float(poses.shape[0])
+    #     img_idx_embed = target_idx/float(num_img) * 2. - 1.0
+
+    #     testsavedir = os.path.join(basedir, expname,
+    #                             'render-spiral-frame-%03d'%\
+    #                             target_idx + '_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+    #     os.makedirs(testsavedir, exist_ok=True)
+    #     with torch.no_grad():
+    #         render_bullet_time(render_poses, img_idx_embed, num_img, hwf,
+    #                            args.chunk, render_kwargs_test,
+    #                            gt_imgs=images, savedir=testsavedir,
+    #                            render_factor=args.render_factor)
+
+    #     return
 
 def main():
     torch.set_default_dtype(torch.float32)
